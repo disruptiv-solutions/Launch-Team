@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export const dynamic = 'force-dynamic';
+
+// Helper to get OpenAI client (lazy initialization)
+const getOpenAI = () => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing OPENAI_API_KEY environment variable');
+  }
+  return new OpenAI({ apiKey });
+};
 
 // POST /api/detect-tasks - Detect actionable tasks in a message
 export async function POST(req: NextRequest) {
@@ -15,6 +20,8 @@ export async function POST(req: NextRequest) {
     if (!message || !message.trim()) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 });
     }
+
+    const openai = getOpenAI();
 
     const systemPrompt = `You are a task detection agent. Analyze the given message and identify any actionable tasks or action items that the user should do.
 

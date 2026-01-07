@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export const dynamic = 'force-dynamic';
+
+// Helper to get OpenAI client (lazy initialization)
+const getOpenAI = () => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing OPENAI_API_KEY environment variable');
+  }
+  return new OpenAI({ apiKey });
+};
 
 // POST /api/summarize - Generate or update conversation summary
 export async function POST(req: NextRequest) {
@@ -15,6 +20,8 @@ export async function POST(req: NextRequest) {
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json({ error: 'messages array is required' }, { status: 400 });
     }
+
+    const openai = getOpenAI();
 
     // Format messages for OpenAI
     const conversationHistory: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = messages
