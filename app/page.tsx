@@ -583,30 +583,37 @@ Rules:
 
   const handleEditAgentPrompt = async (agentId: string) => {
     try {
-      // Normalize agentId - remove special characters to match stored IDs
-      const normalizedId = agentId.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+      // Normalize agentId - remove special characters and collapse multiple underscores
+      const normalizeId = (id: string) => {
+        return id.toLowerCase()
+          .replace(/\s+/g, '_')
+          .replace(/[^a-z0-9_]/g, '')
+          .replace(/_+/g, '_') // Collapse multiple underscores to single
+          .replace(/^_|_$/g, ''); // Remove leading/trailing underscores
+      };
       
-      // Try to load from new agents system first with normalized ID
-      const agentsResponse = await fetch(`/api/agents?agentId=${encodeURIComponent(normalizedId)}`);
+      const normalizedId = normalizeId(agentId);
+      let foundAgentId = normalizedId;
       let currentPrompt = '';
       let agentName = '';
       
-      if (agentsResponse.ok) {
-        const agentsData = await agentsResponse.json();
-        if (agentsData.agent) {
-          currentPrompt = agentsData.agent.systemPrompt || '';
-          agentName = agentsData.agent.name || '';
-        }
-      }
+      // Try multiple ID variations
+      const idVariations = [
+        normalizedId,
+        agentId, // Original ID
+        normalizeId(agentId.replace(/_+/g, '_')), // Collapsed original
+      ].filter((id, index, arr) => arr.indexOf(id) === index); // Remove duplicates
       
-      // Also try with original ID in case it's stored differently
-      if (!currentPrompt && normalizedId !== agentId) {
-        const agentsResponse2 = await fetch(`/api/agents?agentId=${encodeURIComponent(agentId)}`);
-        if (agentsResponse2.ok) {
-          const agentsData2 = await agentsResponse2.json();
-          if (agentsData2.agent) {
-            currentPrompt = agentsData2.agent.systemPrompt || '';
-            agentName = agentsData2.agent.name || '';
+      // Try each ID variation
+      for (const testId of idVariations) {
+        const agentsResponse = await fetch(`/api/agents?agentId=${encodeURIComponent(testId)}`);
+        if (agentsResponse.ok) {
+          const agentsData = await agentsResponse.json();
+          if (agentsData.agent) {
+            currentPrompt = agentsData.agent.systemPrompt || '';
+            agentName = agentsData.agent.name || '';
+            foundAgentId = testId; // Use the ID that actually exists
+            break;
           }
         }
       }
@@ -622,13 +629,17 @@ Rules:
         }
       }
       
-      setEditingAgentId(normalizedId); // Use normalized ID for saving
+      setEditingAgentId(foundAgentId); // Use the ID that exists (or normalized if creating new)
       setEditingPrompt(currentPrompt);
       setShowPromptEditor(true);
     } catch (error) {
       console.error('Error loading agent prompt:', error);
       // Fallback to default prompt
-      const normalizedId = agentId.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+      const normalizedId = agentId.toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
       setEditingAgentId(normalizedId);
       setEditingPrompt(defaultPrompts[agentId] || '');
       setShowPromptEditor(true);
@@ -641,16 +652,38 @@ Rules:
     try {
       setIsSavingPrompt(true);
       
-      // Check if agent exists in new system
-      const agentResponse = await fetch(`/api/agents?agentId=${editingAgentId}`);
+      // Normalize ID for lookup
+      const normalizeId = (id: string) => {
+        return id.toLowerCase()
+          .replace(/\s+/g, '_')
+          .replace(/[^a-z0-9_]/g, '')
+          .replace(/_+/g, '_')
+          .replace(/^_|_$/g, '');
+      };
+      
+      const normalizedId = normalizeId(editingAgentId);
+      
+      // Try to find agent with normalized ID or original ID
+      const idVariations = [
+        normalizedId,
+        editingAgentId,
+      ].filter((id, index, arr) => arr.indexOf(id) === index);
+      
       let agentExists = false;
       let existingAgent = null;
+      let foundAgentId = normalizedId;
       
-      if (agentResponse.ok) {
-        const agentData = await agentResponse.json();
-        if (agentData.agent) {
-          agentExists = true;
-          existingAgent = agentData.agent;
+      // Check each ID variation
+      for (const testId of idVariations) {
+        const agentResponse = await fetch(`/api/agents?agentId=${encodeURIComponent(testId)}`);
+        if (agentResponse.ok) {
+          const agentData = await agentResponse.json();
+          if (agentData.agent) {
+            agentExists = true;
+            existingAgent = agentData.agent;
+            foundAgentId = testId; // Use the ID that actually exists
+            break;
+          }
         }
       }
       
@@ -660,37 +693,39 @@ Rules:
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            agentId: editingAgentId,
+            agentId: foundAgentId,
             systemPrompt: editingPrompt,
           }),
         });
         
-          if (updateResponse.ok) {
-            // Reload agents list to refresh UI
-            await reloadAgents();
-            setShowPromptEditor(false);
-            setEditingAgentId(null);
-            setEditingPrompt('');
-            alert('Prompt saved successfully!');
-            return;
-          } else {
-            const errorData = await updateResponse.json().catch(() => ({ error: 'Unknown error' }));
-            throw new Error(errorData.error || 'Failed to update agent');
-          }
+        if (updateResponse.ok) {
+          // Reload agents list to refresh UI
+          await reloadAgents();
+          setShowPromptEditor(false);
+          setEditingAgentId(null);
+          setEditingPrompt('');
+          alert('Prompt saved successfully!');
+          return;
+        } else {
+          const errorData = await updateResponse.json().catch(() => ({ error: 'Unknown error' }));
+          throw new Error(errorData.error || 'Failed to update agent');
+        }
       } else {
         // Agent doesn't exist in new system - try to create it or use old system
-        // First, try to find agent info from the sidebar list
-        const agentInfo = agentOptions.find(a => a.id === editingAgentId);
+        // First, try to find agent info from the sidebar list (try both normalized and original ID)
+        const agentInfo = agentOptions.find(a => 
+          normalizeId(a.id) === normalizedId || a.id === editingAgentId || a.id === normalizedId
+        );
         
         if (agentInfo) {
-          // Create new agent in the new system
+          // Create new agent in the new system (will use normalized ID from name)
           const createResponse = await fetch('/api/agents', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               name: agentInfo.name,
               systemPrompt: editingPrompt,
-              agentType: editingAgentId === 'chief_of_staff' ? 'team_lead' : 'sub_agent',
+              agentType: normalizedId === 'chief_of_staff' ? 'team_lead' : 'sub_agent',
               description: agentInfo.role,
             }),
           });
@@ -706,6 +741,7 @@ Rules:
           } else {
             const errorData = await createResponse.json().catch(() => ({ error: 'Unknown error' }));
             console.error('Failed to create agent:', errorData);
+            // Continue to fallback
           }
         }
         
@@ -714,7 +750,7 @@ Rules:
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            agentId: editingAgentId,
+            agentId: normalizedId,
             prompt: editingPrompt,
           }),
         });

@@ -39,8 +39,12 @@ export const createAgentDefinition = async (
   tools?: string[],
   model?: string
 ): Promise<string> => {
-  // Generate agentId: lowercase, replace spaces with underscores, remove special chars except underscores
-  const agentId = name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+  // Generate agentId: lowercase, replace spaces with underscores, remove special chars, collapse multiple underscores
+  const agentId = name.toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_') // Collapse multiple underscores to single
+    .replace(/^_|_$/g, ''); // Remove leading/trailing underscores
   const now = Timestamp.now();
 
   const agentData: AgentDefinition = {

@@ -15,9 +15,28 @@ export async function GET(req: NextRequest) {
     const agentId = searchParams.get('agentId');
 
     if (agentId) {
-      // Decode the agentId in case it has special characters
+      // Decode and normalize the agentId
       const decodedAgentId = decodeURIComponent(agentId);
-      const agent = await getAgentDefinition(decodedAgentId);
+      
+      // Normalize ID: lowercase, collapse multiple underscores
+      const normalizeId = (id: string) => {
+        return id.toLowerCase()
+          .replace(/\s+/g, '_')
+          .replace(/[^a-z0-9_]/g, '')
+          .replace(/_+/g, '_')
+          .replace(/^_|_$/g, '');
+      };
+      
+      const normalizedId = normalizeId(decodedAgentId);
+      
+      // Try normalized ID first
+      let agent = await getAgentDefinition(normalizedId);
+      
+      // If not found, try original ID (in case it's stored with different format)
+      if (!agent && normalizedId !== decodedAgentId) {
+        agent = await getAgentDefinition(decodedAgentId);
+      }
+      
       if (!agent) {
         return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
       }
@@ -69,9 +88,35 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'agentId is required' }, { status: 400 });
     }
 
-    await updateAgentDefinition(agentId, updates);
-    const agent = await getAgentDefinition(agentId);
-    return NextResponse.json({ agent });
+    // Normalize ID: lowercase, collapse multiple underscores
+    const normalizeId = (id: string) => {
+      return id.toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+    };
+    
+    const normalizedId = normalizeId(agentId);
+    
+    // Try to find agent with normalized ID or original ID
+    let foundAgentId = normalizedId;
+    let agent = await getAgentDefinition(normalizedId);
+    
+    if (!agent && normalizedId !== agentId) {
+      agent = await getAgentDefinition(agentId);
+      if (agent) {
+        foundAgentId = agentId;
+      }
+    }
+    
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
+    }
+
+    await updateAgentDefinition(foundAgentId, updates);
+    const updatedAgent = await getAgentDefinition(foundAgentId);
+    return NextResponse.json({ agent: updatedAgent });
   } catch (error: any) {
     console.error('Error updating agent:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
