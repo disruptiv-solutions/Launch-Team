@@ -3398,9 +3398,11 @@ Rules:
               )}
               
               {conversationSummary ? (
-                <p className="text-sm text-neutral-300 leading-relaxed">
-                  {conversationSummary}
-                </p>
+                <div className="text-sm text-neutral-300 leading-relaxed prose prose-sm prose-neutral prose-invert max-w-none">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {conversationSummary}
+                  </ReactMarkdown>
+                </div>
               ) : (
                 <p className="text-xs text-neutral-500 italic">
                   {isGeneratingSummary ? 'Generating summary...' : 'Summary will appear as conversation progresses'}
@@ -3596,9 +3598,11 @@ Rules:
                 )}
                 
                 {conversationSummary ? (
-                  <p className="text-sm text-neutral-300 leading-relaxed">
-                    {conversationSummary}
-                  </p>
+                  <div className="text-sm text-neutral-300 leading-relaxed prose prose-sm prose-neutral prose-invert max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {conversationSummary}
+                    </ReactMarkdown>
+                  </div>
                 ) : (
                   <p className="text-xs text-neutral-500 italic">
                     {isGeneratingSummary ? 'Generating summary...' : 'Summary will appear as conversation progresses'}
