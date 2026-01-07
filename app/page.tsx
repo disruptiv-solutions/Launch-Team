@@ -1735,18 +1735,6 @@ Rules:
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-8">
-          <section>
-            <h3 className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-4">Quick Insights</h3>
-            <div className="bg-indigo-900/20 rounded-2xl p-4 border border-indigo-800">
-              <div className="flex items-center gap-2 text-indigo-400 mb-2">
-                <Info size={14} />
-                <span className="text-xs font-bold uppercase">System Status</span>
-              </div>
-              <p className="text-[11px] leading-relaxed text-indigo-300">
-                {isLoading ? `Currently delegating tasks to ${activeAgent?.replace('_', ' ')}...` : "Waiting for objective briefing from operator."}
-              </p>
-            </div>
-          </section>
         </div>
 
         <div className="p-6 border-t border-neutral-800 space-y-3">
@@ -2065,18 +2053,6 @@ Rules:
                 </div>
               </section>
 
-              <section>
-                <h3 className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-4">Quick Insights</h3>
-                <div className="bg-indigo-900/20 rounded-2xl p-4 border border-indigo-800">
-                  <div className="flex items-center gap-2 text-indigo-400 mb-2">
-                    <Info size={14} />
-                    <span className="text-xs font-bold uppercase">System Status</span>
-                  </div>
-                  <p className="text-[11px] leading-relaxed text-indigo-300">
-                    {isLoading ? `Currently delegating tasks to ${activeAgent?.replace('_', ' ')}...` : "Waiting for objective briefing from operator."}
-                  </p>
-                </div>
-              </section>
             </div>
 
             <div className="p-6 border-t border-neutral-800 space-y-3">
