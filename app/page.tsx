@@ -66,7 +66,7 @@ type Attachment = {
 
 const MarkdownMessage = ({ content }: { content: string }) => {
   return (
-    <div className="prose prose-neutral max-w-none prose-invert prose-p:leading-relaxed prose-a:no-underline">
+    <div className="prose prose-neutral max-w-none prose-invert prose-p:leading-relaxed prose-a:no-underline break-words overflow-wrap-anywhere">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         // Keep it safe by default: no raw HTML rendering.
@@ -1553,7 +1553,7 @@ Rules:
   };
 
   return (
-    <div className="flex h-screen bg-neutral-950 font-sans text-neutral-100">
+    <div className="flex h-screen bg-neutral-950 font-sans text-neutral-100 overflow-x-hidden max-w-full">
       {/* Sidebar - Desktop Only */}
       <aside className="hidden lg:flex flex-col w-72 bg-neutral-900 border-r border-neutral-800 transition-all duration-300">
         <div className="p-6 border-b border-neutral-800">
@@ -2146,9 +2146,9 @@ Rules:
         {/* Messages */}
         <div 
           ref={scrollRef}
-          className="flex-1 overflow-y-auto px-4 md:px-8 py-10 space-y-8 scrollbar-thin scrollbar-thumb-neutral-800"
+          className="flex-1 overflow-y-auto overflow-x-hidden px-3 sm:px-4 md:px-8 py-10 space-y-8 scrollbar-thin scrollbar-thumb-neutral-800"
         >
-          <div className="max-w-4xl mx-auto space-y-10">
+          <div className="max-w-4xl mx-auto space-y-10 w-full">
             {messages.map((msg, index) => {
               // Filter out streaming messages for meaningful index
               const meaningfulIndex = messages.slice(0, index + 1).filter(m => !m.isStreaming).length - 1;
@@ -2177,7 +2177,7 @@ Rules:
 
                 {/* Content Wrapper */}
                 <div className={cn(
-                  "flex flex-col gap-2 max-w-[85%] md:max-w-[75%]",
+                  "flex flex-col gap-2 max-w-[85%] sm:max-w-[80%] md:max-w-[75%] min-w-0",
                   msg.role === 'user' ? "items-end" : "items-start"
                 )}>
                   {/* Metadata */}
@@ -2195,7 +2195,7 @@ Rules:
 
                   {/* Bubble */}
                   <div className={cn(
-                    "px-5 py-4 rounded-3xl text-[15px] leading-relaxed shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07)] shadow-none",
+                    "px-4 sm:px-5 py-4 rounded-3xl text-[15px] leading-relaxed shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07)] shadow-none break-words overflow-wrap-anywhere",
                     msg.role === 'user'
                       ? "bg-indigo-600 text-white rounded-tr-none selection:bg-indigo-300"
                       : "bg-neutral-900 text-neutral-200 border border-neutral-800 rounded-tl-none selection:bg-indigo-900/50"
@@ -2240,7 +2240,7 @@ Rules:
                                   target="_blank"
                                   rel="noreferrer"
                                   className={cn(
-                                    "flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors",
+                                    "flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors min-w-0",
                                     msg.role === 'user'
                                       ? "border-indigo-300/30 bg-indigo-500/20 hover:bg-indigo-500/30"
                                       : "border-neutral-800 bg-neutral-950 hover:bg-neutral-900"
@@ -2248,7 +2248,7 @@ Rules:
                                   aria-label={`Open file ${att.name}`}
                                 >
                                   <FileIcon size={14} className={cn(msg.role === 'user' ? "text-indigo-100" : "text-neutral-300")} />
-                                  <span className="truncate">{att.name}</span>
+                                  <span className="truncate min-w-0 flex-1">{att.name}</span>
                                   <span className={cn("ml-auto text-[10px] font-bold opacity-70", msg.role === 'user' ? "text-indigo-100" : "text-neutral-400")}>
                                     {(att.sizeBytes / (1024 * 1024)).toFixed(1)}MB
                                   </span>
@@ -2406,7 +2406,7 @@ Rules:
                 onPaste={handlePaste}
                 placeholder="Brief your team..."
                 rows={1}
-                className="flex-1 bg-transparent text-neutral-100 pl-1 pr-12 py-3 focus:outline-none resize-none overflow-hidden text-base min-h-[50px] max-h-[200px]"
+                className="flex-1 bg-transparent text-neutral-100 pl-1 pr-12 py-3 focus:outline-none resize-none overflow-hidden text-base min-h-[50px] max-h-[200px] break-words overflow-wrap-anywhere min-w-0"
                 onInput={(e) => {
                   const target = e.target as HTMLTextAreaElement;
                   target.style.height = 'auto';
