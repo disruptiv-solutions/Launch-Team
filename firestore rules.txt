@@ -1,0 +1,82 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Sessions collection - stores chat conversations
+    match /sessions/{sessionId} {
+      // Allow read access to all sessions
+      allow read: if true;
+      
+      // Allow write access (create, update, delete) to all sessions
+      // NOTE: For production, you should add authentication checks:
+      // allow write: if request.auth != null;
+      allow write: if true;
+    }
+    
+    // Agent prompts collection - stores custom system prompts for agents
+    match /agent_prompts/{agentId} {
+      // Allow read access to all agent prompts
+      allow read: if true;
+      
+      // Allow write access (create, update) to all agent prompts
+      // NOTE: For production, you should add authentication checks:
+      // allow write: if request.auth != null;
+      allow write: if true;
+    }
+    
+    // Documents collection - stores saved documents from chat messages
+    match /documents/{documentId} {
+      // Allow read access to all documents
+      allow read: if true;
+      
+      // Allow write access (create, update, delete) to all documents
+      // NOTE: For production, you should add authentication checks:
+      // allow write: if request.auth != null;
+      allow write: if true;
+    }
+    
+    // Summaries collection - stores conversation summaries
+    match /summaries/{summaryId} {
+      // Allow read access to all summaries
+      allow read: if true;
+      
+      // Allow write access (create, update, delete) to all summaries
+      // NOTE: For production, you should add authentication checks:
+      // allow write: if request.auth != null;
+      allow write: if true;
+    }
+    
+    // Tasks collection - stores actionable tasks from conversations
+    match /tasks/{taskId} {
+      // Allow read access to all tasks
+      allow read: if true;
+      
+      // Allow write access (create, update, delete) to all tasks
+      // NOTE: For production, you should add authentication checks:
+      // allow write: if request.auth != null;
+      allow write: if true;
+    }
+    
+    // Teams collection - stores team configurations
+    match /teams/{teamId} {
+      // Allow read access to all teams
+      allow read: if true;
+      
+      // Allow write access (create, update, delete) to all teams
+      // NOTE: For production, you should add authentication checks:
+      // allow write: if request.auth != null;
+      allow write: if true;
+    }
+    
+    // Agents collection - stores agent definitions
+    match /agents/{agentId} {
+      // Allow read access to all agents
+      allow read: if true;
+      
+      // Allow write access (create, update, delete) to all agents
+      // NOTE: For production, you should add authentication checks:
+      // allow write: if request.auth != null;
+      allow write: if true;
+    }
+  }
+}
