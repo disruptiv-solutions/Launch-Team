@@ -78,27 +78,32 @@ export const gbetaProgramSpecialist = new Agent({
 
 /**
  * CHIEF OF STAFF (PRIMARY ORCHESTRATOR)
- * Uses handoffs so the UI can show agent switching in real-time.
+ * In team mode, the API layer consults specialists and the Chief synthesizes
+ * a single final response (no handoffs).
  */
-export const teamLeadAgent = Agent.create({
+export const teamLeadAgent = new Agent({
   name: 'chief_of_staff',
   model: 'gpt-5.2',
   instructions: `${RECOMMENDED_PROMPT_PREFIX}\n${CHIEF_OF_STAFF_PROMPT}`,
-  handoffs: [
-    fundraisingCashFlowAdvisor,
-    gtmRevenueGrowthStrategist,
-    productTechnicalAdvisor,
-    legalComplianceAdvisor,
-    brandVoiceMarketingAgent,
-    documentationKnowledgeManager,
-    communityEngagementManager,
-    founderWellbeingAdvisor,
-    operationsScalingAdvisor,
-    gbetaProgramSpecialist,
-  ],
   // Give Chief of Staff light research ability for misc lookups, but prefer delegation.
   tools: [webSearchTool()],
 });
+
+/**
+ * Built-in specialist agents used for consultation in hierarchical team mode.
+ */
+export const teamSpecialists: Agent[] = [
+  fundraisingCashFlowAdvisor,
+  gtmRevenueGrowthStrategist,
+  productTechnicalAdvisor,
+  legalComplianceAdvisor,
+  brandVoiceMarketingAgent,
+  documentationKnowledgeManager,
+  communityEngagementManager,
+  founderWellbeingAdvisor,
+  operationsScalingAdvisor,
+  gbetaProgramSpecialist,
+];
 
 /**
  * Map of all agents by their ID for easy lookup

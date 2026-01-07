@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { getTeam } from './teams';
 import { getAgentPrompt } from './agentPrompts';
+import { buildInstructionsWithMemories, listAgentMemories } from './agentMemories';
 
 export type AgentDefinition = {
   id: string;
@@ -141,8 +142,22 @@ export const buildAgentFromDefinition = (agentDef: AgentDefinition): Agent => {
   });
 };
 
+export const buildAgentFromDefinitionWithMemories = async (agentDef: AgentDefinition): Promise<Agent> => {
+  const base = buildAgentFromDefinition(agentDef);
+  const memories = await listAgentMemories(agentDef.id);
+  const baseInstructions = agentDef.systemPrompt;
+  const instructions = buildInstructionsWithMemories({ baseInstructions, memories });
+
+  return new Agent({
+    name: base.name,
+    model: agentDef.model || 'gpt-5.2',
+    instructions,
+    tools: agentDef.tools?.includes('webSearch') ? [webSearchTool()] : [],
+  });
+};
+
 /**
- * Build a team agent with handoffs to sub-agents
+ * Build a team lead agent for synthesis (no handoffs).
  */
 export const buildTeamAgent = async (teamId: string): Promise<Agent> => {
   const team = await getTeam(teamId);
@@ -156,18 +171,49 @@ export const buildTeamAgent = async (teamId: string): Promise<Agent> => {
     throw new Error(`Team lead agent ${team.teamLeadAgentId} not found`);
   }
 
-  // Get sub-agent definitions
-  const subAgentDefs = await getAgentDefinitionsByIds(team.subAgentIds);
+  const memories = await listAgentMemories(teamLeadDef.id);
+  const baseInstructions = `${RECOMMENDED_PROMPT_PREFIX}\n${teamLeadDef.systemPrompt}`;
+  const instructions = buildInstructionsWithMemories({ baseInstructions, memories });
 
-  // Build sub-agents
-  const subAgents = subAgentDefs.map((def) => buildAgentFromDefinition(def));
-
-  // Create team lead agent with handoffs
-  return Agent.create({
+  return new Agent({
     name: teamLeadDef.id,
     model: teamLeadDef.model || 'gpt-5.2',
-    instructions: `${RECOMMENDED_PROMPT_PREFIX}\n${teamLeadDef.systemPrompt}`,
-    handoffs: subAgents,
+    instructions,
     tools: teamLeadDef.tools?.includes('webSearch') ? [webSearchTool()] : [],
   });
+};
+
+export const buildTeamAgentsForConsultation = async (
+  teamId: string,
+): Promise<{
+  teamLeadAgent: Agent;
+  teamLeadDefinition: AgentDefinition;
+  subAgentDefinitions: AgentDefinition[];
+  subAgents: Agent[];
+}> => {
+  const team = await getTeam(teamId);
+  if (!team) {
+    throw new Error(`Team ${teamId} not found`);
+  }
+
+  const teamLeadDefinition = await getAgentDefinition(team.teamLeadAgentId);
+  if (!teamLeadDefinition) {
+    throw new Error(`Team lead agent ${team.teamLeadAgentId} not found`);
+  }
+
+  const subAgentDefinitions = await getAgentDefinitionsByIds(team.subAgentIds || []);
+  const subAgents = await Promise.all(subAgentDefinitions.map((def) => buildAgentFromDefinitionWithMemories(def)));
+
+  const leadMemories = await listAgentMemories(teamLeadDefinition.id);
+  const leadBaseInstructions = `${RECOMMENDED_PROMPT_PREFIX}\n${teamLeadDefinition.systemPrompt}`;
+  const leadInstructions = buildInstructionsWithMemories({ baseInstructions: leadBaseInstructions, memories: leadMemories });
+
+  const teamLeadAgent = new Agent({
+    name: teamLeadDefinition.id,
+    model: teamLeadDefinition.model || 'gpt-5.2',
+    instructions: leadInstructions,
+    tools: teamLeadDefinition.tools?.includes('webSearch') ? [webSearchTool()] : [],
+  });
+
+  return { teamLeadAgent, teamLeadDefinition, subAgentDefinitions, subAgents };
 };

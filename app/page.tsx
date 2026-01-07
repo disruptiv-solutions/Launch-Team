@@ -35,7 +35,8 @@ import {
   Image as ImageIcon,
   CheckSquare,
   Square,
-  X as XIcon
+  X as XIcon,
+  Brain
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -51,7 +52,19 @@ type Message = {
   content: string;
   agent?: string;
   attachments?: Attachment[];
+  consultedAgents?: string[];
+  consultingAgents?: string[];
+  consultedAgentsCompleted?: string[];
+  planText?: string;
+  phase?: 'planning' | 'consulting' | 'answering' | 'done';
   isStreaming?: boolean;
+};
+
+type AgentMemory = {
+  id: string;
+  agentId: string;
+  text: string;
+  createdAt?: any;
 };
 
 type Attachment = {
@@ -141,6 +154,21 @@ const MarkdownMessage = ({ content }: { content: string }) => {
   );
 };
 
+const formatTimestamp = (ts: any): string => {
+  if (!ts) return '';
+  if (typeof ts?.toDate === 'function') {
+    try {
+      return ts.toDate().toLocaleString();
+    } catch {
+      return '';
+    }
+  }
+  if (typeof ts?.seconds === 'number') {
+    return new Date(ts.seconds * 1000).toLocaleString();
+  }
+  return '';
+};
+
 const AgentBadge = ({ name, isActive }: { name: string, isActive?: boolean }) => {
   const isResearcher = name.includes('researcher');
   const isCreative = name.includes('creative');
@@ -204,12 +232,39 @@ const ChatInterface = () => {
   const [editingPrompt, setEditingPrompt] = useState('');
   const [isSavingPrompt, setIsSavingPrompt] = useState(false);
   const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+  const [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed] = useState(false);
   const [showSaveDocModal, setShowSaveDocModal] = useState(false);
   const [docToSave, setDocToSave] = useState<{ content: string; agent?: string } | null>(null);
   const [docTitle, setDocTitle] = useState('');
   const [isSavingDoc, setIsSavingDoc] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [suggestedMemories, setSuggestedMemories] = useState<
+    Record<string, Record<string, string[]>>
+  >({});
+  const [isSuggestingMemories, setIsSuggestingMemories] = useState<Map<string, boolean>>(new Map());
+  const [openMemoryMenuFor, setOpenMemoryMenuFor] = useState<string | null>(null);
+  const [showMemoryModal, setShowMemoryModal] = useState(false);
+  const [memoryModalData, setMemoryModalData] = useState<{
+    messageId: string;
+    meaningfulIndex: number;
+  } | null>(null);
+  const [agentMemoriesByAgentId, setAgentMemoriesByAgentId] = useState<Record<string, AgentMemory[]>>({});
+  const [isLoadingAgentMemories, setIsLoadingAgentMemories] = useState(false);
+  const [isSavingAgentMemory, setIsSavingAgentMemory] = useState<Map<string, boolean>>(new Map());
+  const [isDeletingAgentMemory, setIsDeletingAgentMemory] = useState<Map<string, boolean>>(new Map());
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      // No more memory menu root check
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
   const [showLivePanel, setShowLivePanel] = useState(false);
+  const [isDesktopLivePanelCollapsed, setIsDesktopLivePanelCollapsed] = useState(false);
   const [sessionDocuments, setSessionDocuments] = useState<any[]>([]);
   const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
   const [conversationSummary, setConversationSummary] = useState<string>('');
@@ -772,6 +827,12 @@ Rules:
     }
   };
 
+  useEffect(() => {
+    if (!showPromptEditor || !editingAgentId) return;
+    loadAgentMemories(editingAgentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPromptEditor, editingAgentId]);
+
   const handleCopyMessage = async (content: string, messageId: string) => {
     try {
       await navigator.clipboard.writeText(content);
@@ -1070,6 +1131,166 @@ Rules:
     }
   };
 
+  const suggestMemoriesForMessage = async (params: {
+    messageIndex: number;
+    messageId: string;
+    assistantMessage: Message;
+    conversationSnippet: string;
+  }) => {
+    const assistantFinalText = params.assistantMessage.content;
+    if (!assistantFinalText || assistantFinalText.trim().length < 20) return;
+
+    const agentIdsRaw = [
+      ...(Array.isArray(params.assistantMessage.consultedAgents) ? params.assistantMessage.consultedAgents : []),
+      ...(typeof params.assistantMessage.agent === 'string' ? [params.assistantMessage.agent] : []),
+    ];
+    const agentIds = Array.from(new Set(agentIdsRaw.filter((a) => typeof a === 'string' && a.trim()).map((a) => a.trim())));
+    if (agentIds.length === 0) return;
+
+    setIsSuggestingMemories((prev) => new Map(prev).set(params.messageId, true));
+
+    try {
+      const results = await Promise.all(
+        agentIds.map(async (agentId) => {
+          const response = await fetch('/api/suggest-memories', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agentId,
+              agentName: getAgentDisplayName(agentId) || agentId,
+              conversationSnippet: params.conversationSnippet,
+              assistantFinalText,
+            }),
+          });
+
+          if (!response.ok) return { agentId, suggestions: [] as string[] };
+          const data = await response.json();
+          const suggestions = Array.isArray(data.suggestions)
+            ? data.suggestions.filter((s: any) => typeof s === 'string' && s.trim())
+            : [];
+          return { agentId, suggestions };
+        })
+      );
+
+      setSuggestedMemories((prev) => {
+        const next = { ...prev };
+        const byAgent: Record<string, string[]> = { ...(next[params.messageId] ?? {}) };
+        for (const r of results) {
+          byAgent[r.agentId] = r.suggestions;
+        }
+        next[params.messageId] = byAgent;
+        return next;
+      });
+    } catch (error) {
+      console.error('Error suggesting memories:', error);
+    } finally {
+      setIsSuggestingMemories((prev) => {
+        const next = new Map(prev);
+        next.set(params.messageId, false);
+        return next;
+      });
+    }
+  };
+
+  const handleAddMemoryToAgent = async (params: {
+    agentId: string;
+    text: string;
+    messageId: string;
+  }) => {
+    if (!params.text.trim()) return;
+
+    try {
+      const response = await fetch('/api/agent-memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: params.agentId,
+          text: params.text.trim(),
+          source: {
+            sessionId: currentSessionId || undefined,
+            messageId: params.messageId,
+          },
+        }),
+      });
+
+      if (!response.ok) return;
+
+      setSuggestedMemories((prev) => {
+        const next = { ...prev };
+        const byAgent = { ...(next[params.messageId] ?? {}) };
+        const existing = Array.isArray(byAgent[params.agentId]) ? byAgent[params.agentId] : [];
+        byAgent[params.agentId] = existing.filter((s) => s !== params.text);
+        next[params.messageId] = byAgent;
+        return next;
+      });
+    } catch (error) {
+      console.error('Error saving agent memory:', error);
+    }
+  };
+
+  const loadAgentMemories = async (agentId: string) => {
+    try {
+      setIsLoadingAgentMemories(true);
+      const response = await fetch(`/api/agent-memories?agentId=${encodeURIComponent(agentId)}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      const memories = Array.isArray(data.memories) ? data.memories : [];
+
+      setAgentMemoriesByAgentId((prev) => ({
+        ...prev,
+        [agentId]: memories,
+      }));
+    } catch (error) {
+      console.error('Error loading agent memories:', error);
+    } finally {
+      setIsLoadingAgentMemories(false);
+    }
+  };
+
+  const handleUpdateAgentMemory = async (params: { memoryId: string; agentId: string; text: string }) => {
+    if (!params.text.trim()) return;
+
+    setIsSavingAgentMemory((prev) => new Map(prev).set(params.memoryId, true));
+    try {
+      const response = await fetch('/api/agent-memories', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memoryId: params.memoryId, text: params.text.trim() }),
+      });
+      if (!response.ok) return;
+
+      await loadAgentMemories(params.agentId);
+    } catch (error) {
+      console.error('Error updating agent memory:', error);
+    } finally {
+      setIsSavingAgentMemory((prev) => {
+        const next = new Map(prev);
+        next.set(params.memoryId, false);
+        return next;
+      });
+    }
+  };
+
+  const handleDeleteAgentMemory = async (params: { memoryId: string; agentId: string }) => {
+    setIsDeletingAgentMemory((prev) => new Map(prev).set(params.memoryId, true));
+    try {
+      const response = await fetch(`/api/agent-memories?memoryId=${encodeURIComponent(params.memoryId)}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) return;
+
+      await loadAgentMemories(params.agentId);
+    } catch (error) {
+      console.error('Error deleting agent memory:', error);
+    } finally {
+      setIsDeletingAgentMemory((prev) => {
+        const next = new Map(prev);
+        next.set(params.memoryId, false);
+        return next;
+      });
+    }
+  };
+
   const saveTask = async (task: string, messageIndex: number) => {
     if (!currentSessionId) return;
     
@@ -1301,6 +1522,8 @@ Rules:
             role: m.role,
             content: m.content,
             agent: m.agent,
+            planText: typeof m.planText === 'string' ? m.planText : undefined,
+            consultedAgents: Array.isArray(m.consultedAgents) ? m.consultedAgents : undefined,
             attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
           }));
           
@@ -1462,7 +1685,19 @@ Rules:
       let assistantMessage = '';
       let currentAgent = 'chief_of_staff';
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: '', agent: currentAgent, isStreaming: true }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: '',
+          agent: currentAgent,
+          consultedAgents: [],
+          consultingAgents: [],
+          consultedAgentsCompleted: [],
+          phase: 'planning',
+          isStreaming: true,
+        },
+      ]);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1483,6 +1718,77 @@ Rules:
                 setActiveAgent(currentAgent);
               }
 
+              if (typeof data.phase === 'string') {
+                const nextPhase = data.phase as any;
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  const lastMessage = newMessages[newMessages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant' && lastMessage.isStreaming) {
+                    lastMessage.phase = nextPhase;
+                    lastMessage.agent = currentAgent;
+                  }
+                  return newMessages;
+                });
+              }
+
+              if (typeof data.planText === 'string') {
+                const nextPlan = data.planText;
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  const lastMessage = newMessages[newMessages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant' && lastMessage.isStreaming) {
+                    lastMessage.planText = nextPlan;
+                    lastMessage.agent = currentAgent;
+                  }
+                  return newMessages;
+                });
+              }
+
+              if (Array.isArray(data.consultedAgents)) {
+                const consulted = data.consultedAgents.filter((v: any) => typeof v === 'string');
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  const lastMessage = newMessages[newMessages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant' && lastMessage.isStreaming) {
+                    lastMessage.consultedAgents = consulted;
+                    lastMessage.agent = currentAgent;
+                  }
+                  return newMessages;
+                });
+              }
+
+              if (typeof data.consultingAgent === 'string' && typeof data.consultingStatus === 'string') {
+                const consultingAgentId = data.consultingAgent;
+                const consultingStatus = data.consultingStatus;
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  const lastMessage = newMessages[newMessages.length - 1];
+                  if (!lastMessage || lastMessage.role !== 'assistant' || !lastMessage.isStreaming) return newMessages;
+
+                  const currentInProgress = Array.isArray(lastMessage.consultingAgents)
+                    ? lastMessage.consultingAgents
+                    : [];
+                  const currentCompleted = Array.isArray(lastMessage.consultedAgentsCompleted)
+                    ? lastMessage.consultedAgentsCompleted
+                    : [];
+
+                  if (consultingStatus === 'started') {
+                    lastMessage.consultingAgents = Array.from(new Set([...currentInProgress, consultingAgentId]));
+                    lastMessage.consultedAgentsCompleted = Array.from(
+                      new Set(currentCompleted.filter((id) => id !== consultingAgentId))
+                    );
+                  }
+
+                  if (consultingStatus === 'completed') {
+                    lastMessage.consultingAgents = currentInProgress.filter((id) => id !== consultingAgentId);
+                    lastMessage.consultedAgentsCompleted = Array.from(new Set([...currentCompleted, consultingAgentId]));
+                  }
+
+                  lastMessage.agent = currentAgent;
+                  return newMessages;
+                });
+              }
+
               if (data.content) {
                 // In ADK SSE, if it's partial, content is usually the delta
                 // If it's final, content is the full message
@@ -1498,6 +1804,9 @@ Rules:
                   if (lastMessage && lastMessage.role === 'assistant' && lastMessage.isStreaming) {
                     lastMessage.content = assistantMessage;
                     lastMessage.agent = currentAgent;
+                    // Once the assistant starts producing text, stop showing consultation in-progress.
+                    lastMessage.consultingAgents = [];
+                    lastMessage.phase = 'answering';
                   }
                   return newMessages;
                 });
@@ -1528,6 +1837,27 @@ Rules:
           setTimeout(() => {
             detectTasks(lastMessage.content, messageIndex);
           }, 1000);
+
+          const messageId = `msg-${meaningfulMessages.length - 1}`;
+          setTimeout(() => {
+            const snippetMessages = meaningfulMessages.slice(Math.max(0, meaningfulMessages.length - 8));
+            const conversationSnippet = snippetMessages
+              .map((m) => {
+                const role = m.role === 'assistant' ? 'ASSISTANT' : 'USER';
+                const text = typeof m.content === 'string' ? m.content.trim() : '';
+                if (!text) return '';
+                return `${role}: ${text}`;
+              })
+              .filter(Boolean)
+              .join('\n\n');
+
+            suggestMemoriesForMessage({
+              messageIndex,
+              messageId,
+              assistantMessage: lastMessage,
+              conversationSnippet,
+            });
+          }, 1300);
         }
         
         return newMessages;
@@ -1555,19 +1885,96 @@ Rules:
   return (
     <div className="flex h-screen bg-neutral-950 font-sans text-neutral-100 overflow-x-hidden max-w-full">
       {/* Sidebar - Desktop Only */}
-      <aside className="hidden lg:flex flex-col w-72 bg-neutral-900 border-r border-neutral-800 transition-all duration-300">
-        <div className="p-6 border-b border-neutral-800">
-          <div className="flex items-center gap-3 mb-6">
+      <aside
+        className={cn(
+          "hidden lg:flex flex-col bg-neutral-900 border-r border-neutral-800 transition-all duration-300",
+          isDesktopSidebarCollapsed ? "w-16" : "w-72"
+        )}
+      >
+        <div className={cn("border-b border-neutral-800", isDesktopSidebarCollapsed ? "p-3" : "p-6")}>
+          <div className={cn("flex items-center", isDesktopSidebarCollapsed ? "justify-center mb-3" : "gap-3 mb-6")}>
             <div className="flex items-center justify-center w-10 h-10 bg-indigo-600 rounded-xl shadow-lg shadow-none transition-transform hover:rotate-3">
               <Zap className="text-white w-6 h-6 fill-white" />
             </div>
-            <div>
-              <h2 className="text-lg font-black tracking-tight leading-none">LAUNCH</h2>
-              <p className="text-[10px] font-bold text-indigo-400 tracking-[0.2em] uppercase mt-1">Team Control</p>
-            </div>
+            {!isDesktopSidebarCollapsed && (
+              <div>
+                <h2 className="text-lg font-black tracking-tight leading-none">LAUNCH</h2>
+                <p className="text-[10px] font-bold text-indigo-400 tracking-[0.2em] uppercase mt-1">Team Control</p>
+              </div>
+            )}
           </div>
-          
-          <div className="space-y-4">
+
+          <div className={cn("flex items-center", isDesktopSidebarCollapsed ? "justify-center" : "justify-between")}>
+            {!isDesktopSidebarCollapsed && (
+              <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-[0.2em]">
+                Navigation
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsDesktopSidebarCollapsed((v) => !v)}
+              className="p-2 hover:bg-neutral-800 rounded-lg transition-colors"
+              aria-label={isDesktopSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={isDesktopSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              <ChevronRight
+                size={18}
+                className={cn(
+                  "text-neutral-400 transition-transform",
+                  isDesktopSidebarCollapsed ? "" : "rotate-180"
+                )}
+              />
+            </button>
+          </div>
+
+          {isDesktopSidebarCollapsed ? (
+            <div className="flex flex-col items-center gap-2 mt-3">
+              <button
+                type="button"
+                onClick={() => setShowTeamConfigModal(true)}
+                className="p-2 hover:bg-neutral-800 rounded-lg transition-colors"
+                aria-label="Team config"
+                title="Team config"
+              >
+                <Settings size={18} className="text-neutral-300" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLivePanel(true)}
+                className="p-2 hover:bg-neutral-800 rounded-lg transition-colors relative"
+                aria-label="Open live panel"
+                title="Open live panel"
+              >
+                <FileText size={18} className="text-neutral-300" />
+                {sessionDocuments.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-indigo-600 rounded-full flex items-center justify-center text-[8px] font-bold text-white">
+                    {sessionDocuments.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedTeamForSession(currentTeamId || '');
+                  setShowTeamSelectionModal(true);
+                }}
+                className="p-2 hover:bg-neutral-800 rounded-lg transition-colors"
+                aria-label="New session"
+                title="New session"
+              >
+                <Plus size={18} className="text-neutral-300" />
+              </button>
+              <a
+                href="/documents"
+                className="p-2 hover:bg-neutral-800 rounded-lg transition-colors"
+                aria-label="Documents"
+                title="Documents"
+              >
+                <FileText size={18} className="text-neutral-300" />
+              </a>
+            </div>
+          ) : (
+            <div className="space-y-4">
             {/* Team Selector */}
             <div className="p-3 bg-neutral-800/50 rounded-xl border border-neutral-800">
               <div className="flex items-center justify-between mb-2">
@@ -1768,23 +2175,35 @@ Rules:
               )}
             </div>
           </div>
+          )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
-        </div>
+        {!isDesktopSidebarCollapsed && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-8"></div>
+        )}
 
-        <div className="p-6 border-t border-neutral-800 space-y-3">
-          <a
-            href="/documents"
-            className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer group"
-          >
-            <FileText size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
-            <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Documents</span>
-          </a>
-          <div className="flex items-center gap-3 text-neutral-400">
-            <ShieldCheck size={18} />
-            <span className="text-xs font-medium">Enterprise Security Active</span>
-          </div>
+        <div className={cn("border-t border-neutral-800", isDesktopSidebarCollapsed ? "p-3" : "p-6")}>
+          {isDesktopSidebarCollapsed ? (
+            <div className="flex flex-col items-center gap-2">
+              <div className="p-2 rounded-lg text-neutral-400" title="Enterprise Security Active" aria-label="Enterprise Security Active">
+                <ShieldCheck size={18} />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <a
+                href="/documents"
+                className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer group"
+              >
+                <FileText size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
+                <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Documents</span>
+              </a>
+              <div className="flex items-center gap-3 text-neutral-400">
+                <ShieldCheck size={18} />
+                <span className="text-xs font-medium">Enterprise Security Active</span>
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -2195,6 +2614,44 @@ Rules:
                     </span>
                   </div>
 
+                  {msg.role === 'assistant' && msg.isStreaming && Array.isArray(msg.consultingAgents) && msg.consultingAgents.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest animate-pulse">
+                        Consulting
+                      </span>
+                      {msg.consultingAgents.map((agentId) => (
+                        <span
+                          key={agentId}
+                          className="rounded-full border border-indigo-900/40 bg-indigo-950/30 px-2 py-0.5 text-[10px] font-semibold text-indigo-200"
+                        >
+                          {getAgentDisplayName(agentId) || agentId.replaceAll('_', ' ')}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {msg.role === 'assistant' && Array.isArray(msg.consultedAgents) && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
+                        Consulted
+                      </span>
+                      {msg.consultedAgents.length === 0 ? (
+                        <span className="text-[10px] font-semibold text-neutral-500">
+                          none
+                        </span>
+                      ) : (
+                        msg.consultedAgents.map((agentId) => (
+                          <span
+                            key={agentId}
+                            className="rounded-full border border-neutral-800 bg-neutral-950 px-2 py-0.5 text-[10px] font-semibold text-neutral-300"
+                          >
+                            {getAgentDisplayName(agentId) || agentId.replaceAll('_', ' ')}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                  )}
+
                   {/* Bubble */}
                   <div 
                     className={cn(
@@ -2278,6 +2735,30 @@ Rules:
                   {/* Message Footer with Copy and Save buttons */}
                   {!msg.isStreaming && (
                     <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {msg.role === 'assistant' && (
+                        <div className="relative">
+                          <button
+                            onClick={() => {
+                              const messageId = `msg-${meaningfulIndex}`;
+                              setMemoryModalData({ messageId, meaningfulIndex });
+                              setShowMemoryModal(true);
+                            }}
+                            className={cn(
+                              "flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold rounded-lg transition-colors",
+                              "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+                            )}
+                            aria-label="Add to agent memory"
+                            type="button"
+                          >
+                            <Brain size={12} />
+                            Memory
+                            {isSuggestingMemories.get(`msg-${meaningfulIndex}`) ? (
+                              <Loader2 size={12} className="animate-spin ml-1" />
+                            ) : null}
+                          </button>
+                        </div>
+                      )}
+
                       <button
                         onClick={() => handleCopyMessage(msg.content, `msg-${index}`)}
                         className={cn(
@@ -2768,6 +3249,94 @@ Rules:
                   placeholder="Enter the system prompt for this agent..."
                   className="w-full h-full min-h-[400px] p-4 bg-neutral-800 border border-neutral-700 rounded-xl text-neutral-100 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                 />
+
+                <div className="mt-6 rounded-xl border border-neutral-800 bg-neutral-950 p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-neutral-100">Saved memories</h3>
+                      <p className="text-xs text-neutral-400">These are appended to the agent at runtime on the next turn.</p>
+                    </div>
+                    {isLoadingAgentMemories && (
+                      <div className="text-xs font-semibold text-neutral-400">
+                        <Loader2 size={14} className="inline-block animate-spin mr-2" />
+                        Loading…
+                      </div>
+                    )}
+                  </div>
+
+                  {(() => {
+                    const agentId = editingAgentId;
+                    const memories = agentId ? agentMemoriesByAgentId[agentId] : [];
+                    if (!agentId) {
+                      return <p className="text-xs text-neutral-500">No agent selected.</p>;
+                    }
+                    if (!Array.isArray(memories) || memories.length === 0) {
+                      return <p className="text-xs text-neutral-500">No saved memories yet.</p>;
+                    }
+
+                    return (
+                      <div className="space-y-3">
+                        {memories.map((mem) => {
+                          const createdAt = formatTimestamp(mem.createdAt);
+                          const isSaving = isSavingAgentMemory.get(mem.id) === true;
+                          const isDeleting = isDeletingAgentMemory.get(mem.id) === true;
+                          return (
+                            <div key={mem.id} className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-3">
+                              <div className="flex items-center justify-between gap-3 mb-2">
+                                <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
+                                  {createdAt ? `Saved ${createdAt}` : 'Saved'}
+                                </p>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateAgentMemory({ memoryId: mem.id, agentId, text: mem.text })}
+                                    disabled={isSaving || isDeleting || !mem.text?.trim()}
+                                    className={cn(
+                                      "px-2 py-1 rounded-lg text-[10px] font-bold transition-colors",
+                                      isSaving || isDeleting || !mem.text?.trim()
+                                        ? "bg-neutral-700 text-neutral-400 cursor-not-allowed"
+                                        : "bg-indigo-600 text-white hover:bg-indigo-700"
+                                    )}
+                                    aria-label="Save memory"
+                                  >
+                                    {isSaving ? 'Saving…' : 'Save'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteAgentMemory({ memoryId: mem.id, agentId })}
+                                    disabled={isSaving || isDeleting}
+                                    className={cn(
+                                      "px-2 py-1 rounded-lg text-[10px] font-bold transition-colors",
+                                      isSaving || isDeleting
+                                        ? "bg-neutral-700 text-neutral-400 cursor-not-allowed"
+                                        : "bg-red-900/40 text-red-300 hover:bg-red-900/60"
+                                    )}
+                                    aria-label="Delete memory"
+                                  >
+                                    {isDeleting ? 'Deleting…' : 'Delete'}
+                                  </button>
+                                </div>
+                              </div>
+                              <textarea
+                                value={mem.text}
+                                onChange={(e) => {
+                                  const nextText = e.target.value;
+                                  setAgentMemoriesByAgentId((prev) => {
+                                    const current = Array.isArray(prev[agentId]) ? prev[agentId] : [];
+                                    const next = current.map((m) => (m.id === mem.id ? { ...m, text: nextText } : m));
+                                    return { ...prev, [agentId]: next };
+                                  });
+                                }}
+                                className="w-full min-h-[80px] p-3 bg-neutral-800 border border-neutral-700 rounded-xl text-neutral-100 font-mono text-xs resize-y focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                                aria-label="Memory text"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
 
               <div className="p-6 border-t border-neutral-800 flex justify-end gap-3">
@@ -2799,6 +3368,112 @@ Rules:
                   ) : (
                     'Save Prompt'
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add to Agent Memory Modal */}
+        {showMemoryModal && memoryModalData && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-neutral-900 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col border border-neutral-800">
+              <div className="p-6 border-b border-neutral-800 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-indigo-900/30 rounded-lg">
+                    <Brain size={20} className="text-indigo-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-neutral-100">Add to agent memory</h2>
+                    <p className="text-sm text-neutral-400">Save key context or preferences to improve future responses</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowMemoryModal(false);
+                    setMemoryModalData(null);
+                  }}
+                  className="p-2 hover:bg-neutral-800 rounded-lg transition-colors"
+                  aria-label="Close modal"
+                >
+                  <XCircle size={20} className="text-neutral-400" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {(() => {
+                  const { messageId } = memoryModalData;
+                  const byAgent = suggestedMemories[messageId] || {};
+                  const agentIds = Object.keys(byAgent);
+                  const hasAny = agentIds.some((a) => Array.isArray(byAgent[a]) && byAgent[a].length > 0);
+
+                  if (!hasAny) {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-12 text-center">
+                        <div className="w-12 h-12 bg-neutral-800 rounded-full flex items-center justify-center mb-4">
+                          <Brain size={24} className="text-neutral-500" />
+                        </div>
+                        <p className="text-neutral-400 max-w-xs">
+                          {isSuggestingMemories.get(messageId)
+                            ? 'Analyzing conversation to suggest memories...'
+                            : 'No specific memories suggested for this message.'}
+                        </p>
+                        {isSuggestingMemories.get(messageId) && (
+                          <Loader2 size={24} className="animate-spin text-indigo-500 mt-4" />
+                        )}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="grid gap-6">
+                      {agentIds.map((agentId) => {
+                        const suggestions = Array.isArray(byAgent[agentId]) ? byAgent[agentId] : [];
+                        if (suggestions.length === 0) return null;
+                        return (
+                          <div key={agentId} className="space-y-3">
+                            <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2">
+                              <Bot size={14} />
+                              {getAgentDisplayName(agentId) || agentId.replaceAll('_', ' ')}
+                            </h3>
+                            <div className="grid gap-3">
+                              {suggestions.map((s, idx) => (
+                                <div 
+                                  key={idx} 
+                                  className="group flex items-start gap-4 p-4 bg-neutral-800/50 border border-neutral-800 rounded-xl hover:border-indigo-500/50 transition-colors"
+                                >
+                                  <div className="flex-1">
+                                    <p className="text-sm text-neutral-200 leading-relaxed whitespace-pre-wrap">
+                                      {s}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddMemoryToAgent({ agentId, text: s, messageId })}
+                                    className="shrink-0 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors shadow-lg shadow-indigo-900/20"
+                                  >
+                                    Add
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="p-6 border-t border-neutral-800 flex justify-end">
+                <button
+                  onClick={() => {
+                    setShowMemoryModal(false);
+                    setMemoryModalData(null);
+                  }}
+                  className="px-6 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-sm font-bold rounded-xl transition-colors"
+                >
+                  Done
                 </button>
               </div>
             </div>
@@ -3333,28 +4008,67 @@ Rules:
       </main>
 
       {/* Live Panel - Desktop (Right Side) */}
-      <aside className="hidden lg:flex flex-col w-[576px] bg-neutral-900 border-l border-neutral-800 transition-all duration-300">
-          <div className="p-6 border-b border-neutral-800">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
+      <aside
+        className={cn(
+          "hidden lg:flex flex-col bg-neutral-900 border-l border-neutral-800 transition-all duration-300",
+          isDesktopLivePanelCollapsed ? "w-16" : "w-[576px]"
+        )}
+      >
+          <div className={cn("border-b border-neutral-800", isDesktopLivePanelCollapsed ? "p-3" : "p-6")}>
+            <div className={cn("flex items-center", isDesktopLivePanelCollapsed ? "justify-center mb-3" : "justify-between mb-4")}>
+              <div className={cn("flex items-center", isDesktopLivePanelCollapsed ? "justify-center" : "gap-3")}>
                 <div className="p-2 bg-indigo-900/30 rounded-lg">
                   <FileText size={20} className="text-indigo-400" />
                 </div>
-                <div>
-                  <h2 className="text-lg font-black tracking-tight leading-none">Live Docs</h2>
-                  <p className="text-[10px] font-bold text-neutral-400 tracking-[0.2em] uppercase mt-1">
-                    {sessionDocuments.length} {sessionDocuments.length === 1 ? 'document' : 'documents'}
-                  </p>
+                {!isDesktopLivePanelCollapsed && (
+                  <div>
+                    <h2 className="text-lg font-black tracking-tight leading-none">Live Docs</h2>
+                    <p className="text-[10px] font-bold text-neutral-400 tracking-[0.2em] uppercase mt-1">
+                      {sessionDocuments.length} {sessionDocuments.length === 1 ? 'document' : 'documents'}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {!isDesktopLivePanelCollapsed && (
+                <button
+                  type="button"
+                  onClick={() => setIsDesktopLivePanelCollapsed(true)}
+                  className="p-2 hover:bg-neutral-800 rounded-lg transition-colors"
+                  aria-label="Collapse live panel"
+                  title="Collapse live panel"
+                >
+                  <ChevronRight size={18} className="text-neutral-400" />
+                </button>
+              )}
+            </div>
+
+            {isDesktopLivePanelCollapsed && (
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDesktopLivePanelCollapsed(false)}
+                  className="p-2 hover:bg-neutral-800 rounded-lg transition-colors"
+                  aria-label="Expand live panel"
+                  title="Expand live panel"
+                >
+                  <ChevronRight size={18} className="text-neutral-400 rotate-180" />
+                </button>
+                <div className="text-[10px] font-bold text-neutral-400 uppercase tracking-[0.2em]">
+                  {sessionDocuments.length}
                 </div>
               </div>
-            </div>
+            )}
             {currentSessionId && (
-              <p className="text-[10px] text-neutral-500 truncate mb-4">
-                {sessions.find(s => s.id === currentSessionId)?.title || 'Current Session'}
-              </p>
+              !isDesktopLivePanelCollapsed && (
+                <p className="text-[10px] text-neutral-500 truncate mb-4">
+                  {sessions.find(s => s.id === currentSessionId)?.title || 'Current Session'}
+                </p>
+              )
             )}
             
             {/* Conversation Summary */}
+            {!isDesktopLivePanelCollapsed && (
             <div className="mt-4 pt-4 border-t border-neutral-800">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
@@ -3409,8 +4123,10 @@ Rules:
                 </p>
               )}
             </div>
+            )}
           </div>
 
+          {!isDesktopLivePanelCollapsed && (
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             {/* Tasks Section */}
             <section>
@@ -3517,6 +4233,7 @@ Rules:
               )}
             </section>
           </div>
+          )}
         </aside>
 
       {/* Live Panel - Mobile Overlay */}

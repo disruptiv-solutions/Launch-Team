@@ -1,8 +1,16 @@
 import { NextRequest } from 'next/server';
-import { teamLeadAgent, agentsById } from '@/lib/agents';
-import { buildAgentFromDefinition, buildTeamAgent, getAgentDefinition } from '@/lib/agentsEnhanced';
-import { run } from '@openai/agents';
+import { teamLeadAgent, agentsById, teamSpecialists } from '@/lib/agents';
+import {
+  buildAgentFromDefinition,
+  buildTeamAgent,
+  buildTeamAgentsForConsultation,
+  buildAgentFromDefinitionWithMemories,
+  getAgentDefinition,
+} from '@/lib/agentsEnhanced';
+import { Agent, run } from '@openai/agents';
 import { getSession, updateSessionMessages, addMessageToSession } from '@/lib/sessions';
+import { z } from 'zod';
+import { buildInstructionsWithMemories, listAgentMemories } from '@/lib/agentMemories';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,9 +21,52 @@ const DEFAULT_IMAGE_DETAIL: 'low' | 'high' | 'auto' = 'auto';
 const MAX_EXTRACT_CHARS_PER_FILE = 60_000;
 const MAX_TOTAL_EXTRACT_CHARS = 120_000;
 
+const MAX_CONSULTED_SPECIALISTS = 4;
+const MAX_TRANSCRIPT_CHARS_FOR_SELECTOR = 12_000;
+const MAX_TRANSCRIPT_CHARS_FOR_SPECIALISTS = 16_000;
+const MAX_SPECIALIST_OUTPUT_CHARS = 6_000;
+
 const truncate = (text: string, maxChars: number) => {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n\n[Truncated: ${text.length - maxChars} more characters omitted]`;
+};
+
+const extractTextFromAgentContent = (content: any): string => {
+  if (!Array.isArray(content)) return '';
+  const parts = content
+    .map((p) => {
+      if (!p || typeof p !== 'object') return '';
+      if (typeof p.text === 'string') return p.text;
+      return '';
+    })
+    .filter(Boolean);
+  return parts.join('\n').trim();
+};
+
+const agentInputItemsToTranscript = (items: any[], maxChars: number): string => {
+  const lines = items
+    .filter((i) => i && typeof i === 'object' && i.type === 'message')
+    .map((i) => {
+      const role = typeof i.role === 'string' ? i.role : 'unknown';
+      const text = extractTextFromAgentContent(i.content);
+      if (!text) return '';
+      return `${role.toUpperCase()}: ${text}`;
+    })
+    .filter(Boolean);
+
+  const joined = lines.join('\n\n');
+  return truncate(joined, maxChars);
+};
+
+const buildSpecialistCatalogText = (specialists: { id: string; name?: string; description?: string }[]) => {
+  if (specialists.length === 0) return '(no specialists)';
+  return specialists
+    .map((s) => {
+      const label = s.name ? `${s.name} (${s.id})` : s.id;
+      const desc = (s.description || '').trim();
+      return desc ? `- ${label}: ${desc}` : `- ${label}`;
+    })
+    .join('\n');
 };
 
 async function fetchBuffer(url: string): Promise<Buffer> {
@@ -237,12 +288,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Determine which agent to use
-    let agentToUse;
-    if (agentMode === 'specific' && selectedAgentId) {
+    const isSpecificMode = agentMode === 'specific' && !!selectedAgentId;
+    let leadAgent: Agent;
+    let specialistAgents: Agent[] = [];
+    let specialistCatalog: { id: string; name?: string; description?: string }[] = [];
+
+    if (isSpecificMode && selectedAgentId) {
       // Direct agent mode (prefer built-in/static agents, fall back to Firestore-defined agents)
       if (agentsById[selectedAgentId]) {
-        agentToUse = agentsById[selectedAgentId];
+        leadAgent = agentsById[selectedAgentId];
       } else {
         const agentDef = await getAgentDefinition(selectedAgentId);
         if (!agentDef) {
@@ -250,19 +304,69 @@ export async function POST(req: NextRequest) {
             status: 404,
           });
         }
-        agentToUse = buildAgentFromDefinition(agentDef);
+        leadAgent = await buildAgentFromDefinitionWithMemories(agentDef);
       }
     } else if (teamId) {
-      // Team mode - build team agent dynamically
+      // Team mode - consult sub-agents and have lead synthesize a single final answer.
       try {
-        agentToUse = await buildTeamAgent(teamId);
+        const built = await buildTeamAgentsForConsultation(teamId);
+        leadAgent = built.teamLeadAgent;
+        specialistAgents = built.subAgents;
+        specialistCatalog = built.subAgentDefinitions.map((d) => ({
+          id: d.id,
+          name: d.name,
+          description: d.description,
+        }));
       } catch (error) {
-        console.error('Error building team agent, falling back to default:', error);
-        agentToUse = teamLeadAgent;
+        console.error('Error building team agents, falling back to default:', error);
+        leadAgent = teamLeadAgent;
+        specialistAgents = teamSpecialists;
+        specialistCatalog = teamSpecialists.map((a) => ({ id: a.name }));
       }
     } else {
-      // Default to existing teamLeadAgent for backward compatibility
-      agentToUse = teamLeadAgent;
+      // Default "all" mode with built-in team
+      leadAgent = teamLeadAgent;
+      specialistAgents = teamSpecialists;
+      specialistCatalog = teamSpecialists.map((a) => ({ id: a.name }));
+    }
+
+    // Apply saved memories to built-in agents at runtime (next-turn effect).
+    // Firestore-built agents already include memories in their instructions.
+    const cloneAgentWithInstructions = (base: Agent, nextInstructions: string): Agent => {
+      const anyBase: any = base as any;
+      const tools = Array.isArray(anyBase.tools) ? anyBase.tools : [];
+      const model = anyBase.model ?? undefined;
+      const modelSettings = anyBase.modelSettings ?? undefined;
+
+      return new Agent({
+        name: anyBase.name,
+        model,
+        modelSettings,
+        instructions: nextInstructions,
+        tools,
+      });
+    };
+
+    const applyMemoriesToAgent = async (agent: Agent): Promise<Agent> => {
+      const anyAgent: any = agent as any;
+      const agentId = typeof anyAgent?.name === 'string' ? anyAgent.name : '';
+      const baseInstructions = typeof anyAgent?.instructions === 'string' ? anyAgent.instructions : '';
+      if (!agentId || !baseInstructions) return agent;
+
+      const memories = await listAgentMemories(agentId);
+      if (!memories || memories.length === 0) return agent;
+
+      const instructions = buildInstructionsWithMemories({ baseInstructions, memories });
+      return cloneAgentWithInstructions(agent, instructions);
+    };
+
+    // Only apply here for built-in/static agents to avoid extra reads.
+    if (agentsById[leadAgent.name] || leadAgent === teamLeadAgent) {
+      leadAgent = await applyMemoriesToAgent(leadAgent);
+    }
+    if (specialistAgents.length > 0 && specialistCatalog.length > 0) {
+      // For built-in specialists, apply memories per agent.
+      specialistAgents = await Promise.all(specialistAgents.map((a) => applyMemoriesToAgent(a)));
     }
 
     const encoder = new TextEncoder();
@@ -270,37 +374,196 @@ export async function POST(req: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          // Run the agent with streaming enabled
-          const result = await run(agentToUse, [...inputHistory, lastMessageItem], {
-            stream: true,
-          });
+          const runInputBase = [...inputHistory, lastMessageItem];
+          const shouldConsultTeam = !isSpecificMode && specialistAgents.length > 0;
 
-          let currentAgentName = agentToUse.name;
+          let finalRunInput: any[] = runInputBase;
+          let consultedAgentsForPersistence: string[] = [];
+          let planTextForPersistence: string | undefined;
+          let phaseForPersistence: 'planning' | 'consulting' | 'answering' | 'done' | undefined;
+
+          if (shouldConsultTeam) {
+            const transcriptForSelector = agentInputItemsToTranscript(runInputBase.slice(-12), MAX_TRANSCRIPT_CHARS_FOR_SELECTOR);
+            const catalogText = buildSpecialistCatalogText(specialistCatalog);
+
+            const SpecialistSelection = z.object({
+              agentIds: z.array(z.string()).default([]),
+              planText: z.string().default(''),
+            });
+
+            const selectorAgent = new Agent({
+              name: `${leadAgent.name}_specialist_selector`,
+              model: 'gpt-5.2',
+              instructions: [
+                `You are the Chief of Staff deciding which specialists to consult for the user's message.`,
+                `Select 0-${MAX_CONSULTED_SPECIALISTS} specialists whose expertise is most relevant.`,
+                `Only return IDs from the provided specialist list.`,
+                `Also provide a 1-sentence plan that mentions who you will consult (or that no consult is needed), and that you will reply after.`,
+                `Return strictly valid JSON matching the schema.`,
+              ].join('\n'),
+              outputType: SpecialistSelection,
+              modelSettings: { temperature: 0.2, toolChoice: 'none' },
+            });
+
+            const selectorPrompt = [
+              `AVAILABLE SPECIALISTS (choose by ID):`,
+              catalogText,
+              ``,
+              `CONVERSATION (most recent):`,
+              transcriptForSelector || '(empty)',
+              ``,
+              `TASK: Return JSON: {"agentIds":["id1","id2",...], "planText":"..."} with up to ${MAX_CONSULTED_SPECIALISTS} IDs (or an empty list if none are needed).`,
+            ].join('\n');
+
+            const selectionResult = await run(selectorAgent, selectorPrompt);
+            const rawSelected = selectionResult.finalOutput?.agentIds ?? [];
+            const rawPlanText =
+              typeof selectionResult.finalOutput?.planText === 'string'
+                ? selectionResult.finalOutput.planText.trim()
+                : '';
+
+            const allowed = new Set(specialistAgents.map((a) => a.name));
+            const selectedAgentIds = Array.from(
+              new Set(
+                rawSelected
+                  .filter((id: any): id is string => typeof id === 'string')
+                  .map((id) => id.trim())
+                  .filter((id) => allowed.has(id))
+              )
+            ).slice(0, MAX_CONSULTED_SPECIALISTS);
+
+            consultedAgentsForPersistence = selectedAgentIds;
+            planTextForPersistence =
+              rawPlanText.length > 0
+                ? rawPlanText
+                : selectedAgentIds.length > 0
+                  ? `Plan: I’ll consult ${selectedAgentIds.join(', ')}, then respond.`
+                  : `Plan: I can answer directly—no specialist consult needed.`;
+
+            phaseForPersistence = 'planning';
+
+            // Notify the client of plan + selected specialists.
+            const planningData = {
+              author: leadAgent.name,
+              phase: 'planning',
+              consultedAgents: selectedAgentIds,
+              planText: planTextForPersistence,
+              partial: true,
+              isFinal: false,
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(planningData)}\n\n`));
+
+            const specialistsToConsult = specialistAgents.filter((a) => selectedAgentIds.includes(a.name));
+            if (specialistsToConsult.length === 0) {
+              // No consultation needed; proceed directly to lead synthesis.
+              finalRunInput = runInputBase;
+            } else {
+              phaseForPersistence = 'consulting';
+              const transcriptForSpecialists = agentInputItemsToTranscript(runInputBase.slice(-16), MAX_TRANSCRIPT_CHARS_FOR_SPECIALISTS);
+
+              const consultationPrompt = (specialistId: string) =>
+                [
+                  `You are being consulted by the Chief of Staff. Do NOT speak to the user directly.`,
+                  `Provide internal notes only. Be concise and actionable.`,
+                  ``,
+                  `FORMAT:`,
+                  `- Key insights (bullets)`,
+                  `- Risks / gotchas (bullets)`,
+                  `- Recommended response angle (1-3 bullets)`,
+                  `- 1-2 clarifying questions (if needed)`,
+                  ``,
+                  `CONVERSATION (most recent):`,
+                  transcriptForSpecialists || '(empty)',
+                  ``,
+                  `SPECIALIST: ${specialistId}`,
+                ].join('\n');
+
+              // Stream live "consulting X" updates to the client.
+              const specialistNotes = await Promise.all(
+                specialistsToConsult.map(async (specialist) => {
+                  const startData = {
+                    author: leadAgent.name,
+                    phase: 'consulting',
+                    consultingAgent: specialist.name,
+                    consultingStatus: 'started',
+                    partial: true,
+                    isFinal: false,
+                  };
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(startData)}\n\n`));
+
+                  try {
+                    const r = await run(specialist, consultationPrompt(specialist.name));
+                    const text = typeof r.finalOutput === 'string' ? r.finalOutput : JSON.stringify(r.finalOutput ?? '');
+
+                    const doneData = {
+                      author: leadAgent.name,
+                      phase: 'consulting',
+                      consultingAgent: specialist.name,
+                      consultingStatus: 'completed',
+                      partial: true,
+                      isFinal: false,
+                    };
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneData)}\n\n`));
+
+                    return { id: specialist.name, text: truncate(text.trim(), MAX_SPECIALIST_OUTPUT_CHARS) };
+                  } catch (e: any) {
+                    const doneData = {
+                      author: leadAgent.name,
+                      phase: 'consulting',
+                      consultingAgent: specialist.name,
+                      consultingStatus: 'completed',
+                      partial: true,
+                      isFinal: false,
+                    };
+                    controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneData)}\n\n`));
+
+                    return { id: specialist.name, text: `Error consulting specialist: ${e?.message ?? String(e)}` };
+                  }
+                })
+              );
+
+              const briefing = [
+                `INTERNAL SPECIALIST BRIEFING (not shown to user):`,
+                ...specialistNotes.map((n) => `\n[${n.id}]\n${n.text}`),
+              ].join('\n');
+
+              const internalBriefingItem = {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: briefing }],
+              };
+
+              finalRunInput = [...inputHistory, internalBriefingItem, lastMessageItem];
+            }
+          }
+
+          // Run the lead agent with streaming enabled (lead always produces final user-facing output)
+          const result = await run(leadAgent, finalRunInput, { stream: true });
+
+          const currentAgentName = leadAgent.name;
           let assistantMessageContent = '';
+          let hasEmittedAnsweringPhase = false;
 
           for await (const event of result) {
-            // Track active agent
-            if (event.type === 'agent_updated_stream_event') {
-              currentAgentName = event.agent.name;
-              
-              // Notify frontend about agent change
-              const agentChangeData = {
-                author: currentAgentName,
-                content: '',
-                partial: true,
-                isFinal: false
-              };
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(agentChangeData)}\n\n`));
-              continue;
-            }
-
             // Handle text deltas
             if (event.type === 'raw_model_stream_event') {
               const data: any = event.data;
               if (data.type === 'output_text_delta' && data.delta) {
+                if (!hasEmittedAnsweringPhase) {
+                  hasEmittedAnsweringPhase = true;
+                  phaseForPersistence = 'answering';
+                  const answeringData = {
+                    author: currentAgentName,
+                    phase: 'answering',
+                    partial: true,
+                    isFinal: false,
+                  };
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(answeringData)}\n\n`));
+                }
                 assistantMessageContent += data.delta;
                 const chunkData = {
                   author: currentAgentName,
+                  phase: 'answering',
                   content: data.delta,
                   partial: true,
                   isFinal: false
@@ -326,15 +589,27 @@ export async function POST(req: NextRequest) {
               role: 'assistant',
               content: finalText,
               agent: currentAgentName,
+              ...(typeof planTextForPersistence === 'string' && planTextForPersistence.trim().length > 0
+                ? { planText: planTextForPersistence.trim() }
+                : {}),
+              ...(Array.isArray(consultedAgentsForPersistence) && consultedAgentsForPersistence.length > 0
+                ? { consultedAgents: consultedAgentsForPersistence }
+                : { consultedAgents: [] }),
             });
           }
 
           // Final event to signal completion
+          phaseForPersistence = 'done';
           const finalData = {
             author: currentAgentName,
+            phase: 'done',
             content: finalText,
             partial: false,
-            isFinal: true
+            isFinal: true,
+            ...(typeof planTextForPersistence === 'string' && planTextForPersistence.trim().length > 0
+              ? { planText: planTextForPersistence.trim() }
+              : {}),
+            consultedAgents: consultedAgentsForPersistence,
           };
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(finalData)}\n\n`));
           

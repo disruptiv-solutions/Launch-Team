@@ -38,6 +38,8 @@ export type Message = {
   content: string;
   agent?: string;
   attachments?: Attachment[];
+  consultedAgents?: string[];
+  planText?: string;
   timestamp?: Timestamp;
 };
 
@@ -149,6 +151,17 @@ export const addMessageToSession = async (
       : {}),
     ...(Array.isArray(message.attachments) && message.attachments.length > 0
       ? { attachments: message.attachments }
+      : {}),
+    ...(Array.isArray(message.consultedAgents)
+      ? {
+          consultedAgents: message.consultedAgents
+            .filter((a) => typeof a === 'string')
+            .map((a) => a.trim())
+            .filter(Boolean),
+        }
+      : {}),
+    ...(typeof message.planText === 'string' && message.planText.trim()
+      ? { planText: message.planText.trim() }
       : {}),
   };
 
