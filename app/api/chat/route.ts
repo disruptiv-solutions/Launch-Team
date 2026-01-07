@@ -3,8 +3,6 @@ import { teamLeadAgent, agentsById } from '@/lib/agents';
 import { buildAgentFromDefinition, buildTeamAgent, getAgentDefinition } from '@/lib/agentsEnhanced';
 import { run } from '@openai/agents';
 import { getSession, updateSessionMessages, addMessageToSession } from '@/lib/sessions';
-import { PDFParse } from 'pdf-parse';
-import mammoth from 'mammoth';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,20 +47,34 @@ async function extractTextFromFile(params: {
   }
 
   if (ct === 'application/pdf') {
-    // In Next.js/Turbopack server builds, pdfjs worker resolution can fail.
-    // Disable worker and use the "fake worker" path in-process.
-    const parser = new PDFParse({ data: buf, disableWorker: true } as any);
+    // Dynamically import pdf-parse to avoid browser API issues during module initialization
     try {
-      const result: any = await parser.getText();
-      return typeof result?.text === 'string' ? result.text : '';
-    } finally {
-      await parser.destroy();
+      const { PDFParse } = await import('pdf-parse');
+      // In Next.js/Turbopack server builds, pdfjs worker resolution can fail.
+      // Disable worker and use the "fake worker" path in-process.
+      const parser = new PDFParse({ data: buf, disableWorker: true } as any);
+      try {
+        const result: any = await parser.getText();
+        return typeof result?.text === 'string' ? result.text : '';
+      } finally {
+        await parser.destroy();
+      }
+    } catch (error) {
+      console.warn('PDF parsing failed:', error);
+      return '';
     }
   }
 
   if (ct === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-    const result: any = await (mammoth as any).extractRawText({ buffer: buf });
-    return typeof result?.value === 'string' ? result.value : '';
+    // Dynamically import mammoth to avoid browser API issues during module initialization
+    try {
+      const mammoth = await import('mammoth');
+      const result: any = await (mammoth as any).extractRawText({ buffer: buf });
+      return typeof result?.value === 'string' ? result.value : '';
+    } catch (error) {
+      console.warn('DOCX parsing failed:', error);
+      return '';
+    }
   }
 
   // .doc and other formats: attach as input_file, but skip extraction here.
