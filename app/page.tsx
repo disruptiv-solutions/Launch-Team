@@ -66,7 +66,7 @@ type Attachment = {
 
 const MarkdownMessage = ({ content }: { content: string }) => {
   return (
-    <div className="prose prose-neutral max-w-none prose-invert prose-p:leading-relaxed prose-a:no-underline break-words overflow-wrap-anywhere">
+    <div className="prose prose-neutral prose-invert prose-p:leading-relaxed prose-a:no-underline break-words overflow-wrap-anywhere w-full max-w-full" style={{ maxWidth: '100%', wordBreak: 'break-word' }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         // Keep it safe by default: no raw HTML rendering.
@@ -79,7 +79,7 @@ const MarkdownMessage = ({ content }: { content: string }) => {
               className="font-semibold text-indigo-400 underline underline-offset-2 hover:text-indigo-300"
             />
           ),
-          p: ({ node: _node, ...props }) => <p {...props} className="m-0 leading-relaxed" />,
+          p: ({ node: _node, ...props }) => <p {...props} className="m-0 leading-relaxed break-words max-w-full" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }} />,
           ul: ({ node: _node, ...props }) => <ul {...props} className="my-2 list-disc pl-6" />,
           ol: ({ node: _node, ...props }) => <ol {...props} className="my-2 list-decimal pl-6" />,
           li: ({ node: _node, ...props }) => <li {...props} className="my-1" />,
@@ -2177,9 +2177,11 @@ Rules:
 
                 {/* Content Wrapper */}
                 <div className={cn(
-                  "flex flex-col gap-2 max-w-[85%] sm:max-w-[80%] md:max-w-[75%] min-w-0",
+                  "flex flex-col gap-2 w-full max-w-[85%] sm:max-w-[80%] md:max-w-[75%] min-w-0",
                   msg.role === 'user' ? "items-end" : "items-start"
-                )}>
+                )}
+                style={{ maxWidth: 'calc(100% - 3rem)' }}
+                >
                   {/* Metadata */}
                   <div className="flex items-center gap-2 mb-1">
                     {msg.role === 'assistant' && msg.agent && (
@@ -2194,12 +2196,15 @@ Rules:
                   </div>
 
                   {/* Bubble */}
-                  <div className={cn(
-                    "px-4 sm:px-5 py-4 rounded-3xl text-[15px] leading-relaxed shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07)] shadow-none break-words overflow-wrap-anywhere",
-                    msg.role === 'user'
-                      ? "bg-indigo-600 text-white rounded-tr-none selection:bg-indigo-300"
-                      : "bg-neutral-900 text-neutral-200 border border-neutral-800 rounded-tl-none selection:bg-indigo-900/50"
-                  )}>
+                  <div 
+                    className={cn(
+                      "px-4 sm:px-5 py-4 rounded-3xl text-[15px] leading-relaxed shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07)] shadow-none break-words overflow-wrap-anywhere w-full max-w-full",
+                      msg.role === 'user'
+                        ? "bg-indigo-600 text-white rounded-tr-none selection:bg-indigo-300"
+                        : "bg-neutral-900 text-neutral-200 border border-neutral-800 rounded-tl-none selection:bg-indigo-900/50"
+                    )}
+                    style={{ wordBreak: 'break-word', overflowWrap: 'anywhere', maxWidth: '100%' }}
+                  >
                     {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
                       <div className="mb-3 space-y-2">
                         {msg.attachments.some((a) => a.kind === 'image') && (
@@ -2259,7 +2264,9 @@ Rules:
                       </div>
                     )}
                     {msg.role === 'assistant' ? (
+                      <div className="w-full max-w-full overflow-hidden" style={{ maxWidth: '100%' }}>
                       <MarkdownMessage content={msg.content} />
+                    </div>
                     ) : (
                       <div className="whitespace-pre-wrap">{msg.content}</div>
                     )}
