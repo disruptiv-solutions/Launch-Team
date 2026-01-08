@@ -44,6 +44,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '@/lib/firebase';
+import { addMessageToSession } from '@/lib/sessions';
 
 const cn = (...inputs: ClassValue[]) => {
   return twMerge(clsx(inputs));

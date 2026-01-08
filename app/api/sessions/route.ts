@@ -4,6 +4,7 @@ import {
   getSession,
   createSession,
   updateSessionTitle,
+  updateSessionMessages,
   deleteSession,
 } from '@/lib/sessions';
 
