@@ -45,7 +45,6 @@ import { twMerge } from 'tailwind-merge';
 import { ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '@/lib/firebase';
 import { addMessageToSession } from '@/lib/sessions';
-import { DinoRun } from '@/lib/DinoRun';
 
 const cn = (...inputs: ClassValue[]) => {
   return twMerge(clsx(inputs));
@@ -4227,11 +4226,11 @@ Rules:
       {/* Live Panel - Desktop (Right Side) */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col bg-neutral-900 border-l border-neutral-800 transition-all duration-300 h-screen",
+          "hidden lg:flex flex-col bg-neutral-900 border-l border-neutral-800 transition-all duration-300",
           isDesktopLivePanelCollapsed ? "w-16" : "w-[576px]"
         )}
       >
-          <div className={cn("border-b border-neutral-800 flex-shrink-0", isDesktopLivePanelCollapsed ? "p-3" : "p-6")}>
+          <div className={cn("border-b border-neutral-800", isDesktopLivePanelCollapsed ? "p-3" : "p-6")}>
             <div className={cn("flex items-center", isDesktopLivePanelCollapsed ? "justify-center mb-3" : "justify-between mb-4")}>
               <div className={cn("flex items-center", isDesktopLivePanelCollapsed ? "justify-center" : "gap-3")}>
                 <div className="p-2 bg-indigo-900/30 rounded-lg">
@@ -4450,12 +4449,6 @@ Rules:
               )}
             </section>
           </div>
-          )}
-          
-          {!isDesktopLivePanelCollapsed && (
-            <div className="flex-shrink-0">
-              <DinoRun />
-            </div>
           )}
         </aside>
 
