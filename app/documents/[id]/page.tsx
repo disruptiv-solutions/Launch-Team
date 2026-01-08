@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowLeft, Loader2, FileText, Zap, Menu, X, Bot, Users, Search, PenTool, Info, ShieldCheck, Sparkles, Activity } from 'lucide-react';
+import { ArrowLeft, Loader2, FileText, Zap, Menu, X, Bot, Users, Search, PenTool, Info, ShieldCheck, Sparkles, Activity, FolderKanban } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -121,6 +121,13 @@ export default function DocumentDetailPage() {
                 <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Back to Chat</span>
               </a>
               <a
+                href="/projects"
+                className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer group"
+              >
+                <FolderKanban size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
+                <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Projects</span>
+              </a>
+              <a
                 href="/documents"
                 className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer group"
               >
@@ -199,6 +206,14 @@ export default function DocumentDetailPage() {
                   >
                     <ArrowLeft size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
                     <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Back to Chat</span>
+                  </a>
+                  <a
+                    href="/projects"
+                    onClick={() => setShowMobileSidebar(false)}
+                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer group"
+                  >
+                    <FolderKanban size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
+                    <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Projects</span>
                   </a>
                   <a
                     href="/documents"

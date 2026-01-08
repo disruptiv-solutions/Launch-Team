@@ -56,20 +56,32 @@ export async function POST(req: NextRequest) {
   try {
     const { name, systemPrompt, agentType, description, tools, model } = await req.json();
 
-    if (!name || !systemPrompt || !agentType) {
+    if (typeof name !== 'string' || typeof systemPrompt !== 'string' || typeof agentType !== 'string') {
       return NextResponse.json(
         { error: 'name, systemPrompt, and agentType are required' },
         { status: 400 }
       );
     }
 
+    const trimmedName = name.trim();
+    const trimmedSystemPrompt = systemPrompt.trim();
+    const trimmedDescription = typeof description === 'string' ? description.trim() : undefined;
+    const normalizedAgentType = agentType === 'team_lead' || agentType === 'sub_agent' ? agentType : null;
+
+    if (!trimmedName || !trimmedSystemPrompt || !normalizedAgentType) {
+      return NextResponse.json(
+        { error: 'name, systemPrompt, and agentType (team_lead|sub_agent) are required' },
+        { status: 400 }
+      );
+    }
+
     const agentId = await createAgentDefinition(
-      name,
-      systemPrompt,
-      agentType,
-      description,
-      tools,
-      model
+      trimmedName,
+      trimmedSystemPrompt,
+      normalizedAgentType,
+      trimmedDescription ? trimmedDescription : undefined,
+      Array.isArray(tools) ? tools : undefined,
+      typeof model === 'string' ? model : undefined
     );
     const agent = await getAgentDefinition(agentId);
     return NextResponse.json({ agent });

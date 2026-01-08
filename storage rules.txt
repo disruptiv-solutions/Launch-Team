@@ -13,6 +13,12 @@ service firebase.storage {
       allow write: if true;
     }
 
+    // Project-related files (project documents and project chat attachments)
+    match /projects/{projectId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     // Default rule for everything else
     match /{allPaths=**} {
       allow read, write: if false;

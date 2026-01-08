@@ -29,6 +29,10 @@ export type AgentDefinition = {
 
 const AGENTS_COLLECTION = 'agents';
 
+const omitUndefinedShallow = <T extends Record<string, any>>(value: T): Partial<T> => {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as Partial<T>;
+};
+
 /**
  * Create a new agent definition
  */
@@ -40,25 +44,29 @@ export const createAgentDefinition = async (
   tools?: string[],
   model?: string
 ): Promise<string> => {
+  const trimmedName = name.trim();
+  const trimmedSystemPrompt = systemPrompt.trim();
+  const trimmedDescription = typeof description === 'string' ? description.trim() : undefined;
+
   // Generate agentId: lowercase, replace spaces with underscores, remove special chars, collapse multiple underscores
-  const agentId = name.toLowerCase()
+  const agentId = trimmedName.toLowerCase()
     .replace(/\s+/g, '_')
     .replace(/[^a-z0-9_]/g, '')
     .replace(/_+/g, '_') // Collapse multiple underscores to single
     .replace(/^_|_$/g, ''); // Remove leading/trailing underscores
   const now = Timestamp.now();
 
-  const agentData: AgentDefinition = {
+  const agentData: AgentDefinition = omitUndefinedShallow({
     id: agentId,
-    name,
-    description,
-    systemPrompt,
+    name: trimmedName,
+    description: trimmedDescription ? trimmedDescription : undefined,
+    systemPrompt: trimmedSystemPrompt,
     agentType,
-    tools: tools || [],
+    tools: (tools || []).filter(Boolean),
     model: model || 'gpt-5.2',
     createdAt: now,
     updatedAt: now,
-  };
+  }) as AgentDefinition;
 
   await setDoc(doc(db, AGENTS_COLLECTION, agentId), agentData);
   return agentId;
@@ -118,10 +126,11 @@ export const updateAgentDefinition = async (
   updates: Partial<AgentDefinition>
 ): Promise<void> => {
   const docRef = doc(db, AGENTS_COLLECTION, agentId);
+  const sanitizedUpdates = omitUndefinedShallow(updates);
   await setDoc(
     docRef,
     {
-      ...updates,
+      ...sanitizedUpdates,
       updatedAt: Timestamp.now(),
     },
     { merge: true }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { FileText, Loader2, Trash2, ChevronRight, Zap, ArrowLeft, Menu, X, Plus, Users, Bot, Activity, Search, PenTool, Info, ShieldCheck, Sparkles } from 'lucide-react';
+import { FileText, Loader2, Trash2, ChevronRight, Zap, ArrowLeft, Menu, X, Plus, Users, Bot, Activity, Search, PenTool, Info, ShieldCheck, Sparkles, FolderKanban } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -107,6 +107,13 @@ export default function DocumentsPage() {
                 <ArrowLeft size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
                 <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Back to Chat</span>
               </a>
+              <a
+                href="/projects"
+                className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer group"
+              >
+                <FolderKanban size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
+                <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Projects</span>
+              </a>
               <div className="flex items-center gap-3 p-3 rounded-lg bg-indigo-900/20 border border-indigo-800 cursor-pointer">
                 <FileText size={18} className="text-indigo-400" />
                 <span className="text-xs font-medium text-indigo-400">Documents</span>
@@ -183,6 +190,14 @@ export default function DocumentsPage() {
                   >
                     <ArrowLeft size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
                     <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Back to Chat</span>
+                  </a>
+                  <a
+                    href="/projects"
+                    onClick={() => setShowMobileSidebar(false)}
+                    className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer group"
+                  >
+                    <FolderKanban size={18} className="text-neutral-400 group-hover:text-indigo-400 transition-colors" />
+                    <span className="text-xs font-medium text-neutral-400 group-hover:text-neutral-100 transition-colors">Projects</span>
                   </a>
                   <div className="flex items-center gap-3 p-3 rounded-lg bg-indigo-900/20 border border-indigo-800 cursor-pointer">
                     <FileText size={18} className="text-indigo-400" />

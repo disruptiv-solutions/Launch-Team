@@ -9,6 +9,9 @@ import {
 } from '@/lib/agentsEnhanced';
 import { Agent, run } from '@openai/agents';
 import { getSession, updateSessionMessages, addMessageToSession } from '@/lib/sessions';
+import { getProject } from '@/lib/projects';
+import { listProjectDocuments } from '@/lib/projectDocuments';
+import { addMessageToProjectChat, listProjectChatMessages } from '@/lib/projectChats';
 import { z } from 'zod';
 import { buildInstructionsWithMemories, listAgentMemories } from '@/lib/agentMemories';
 
@@ -134,7 +137,12 @@ async function extractTextFromFile(params: {
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, sessionId, agentMode, selectedAgentId, teamId } = await req.json();
+    const { messages, sessionId, agentMode, selectedAgentId, teamId, projectId, projectChatId } = await req.json();
+    const isProjectMode =
+      typeof projectId === 'string' &&
+      projectId.trim().length > 0 &&
+      typeof projectChatId === 'string' &&
+      projectChatId.trim().length > 0;
     const lastMessage = messages?.[messages.length - 1];
 
     const lastText = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
@@ -144,9 +152,38 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'No message content or attachments provided' }), { status: 400 });
     }
 
-    // Load session history if sessionId provided
+    // Load history from Firestore (project chat or session) if provided
     let inputHistory: any[] = [];
-    if (sessionId) {
+    if (isProjectMode) {
+      const history = await listProjectChatMessages(projectId, projectChatId, 200);
+      inputHistory = history.map((m: any) => {
+        const role = m.role === 'assistant' ? 'assistant' : 'user';
+        const attachments = Array.isArray(m?.attachments) ? m.attachments : [];
+        const attachmentParts =
+          role === 'user'
+            ? attachments
+                .filter((a: any) => typeof a?.url === 'string' && a.url.length > 0)
+                .map((a: any) => {
+                  if (a.kind === 'image' || (typeof a.contentType === 'string' && a.contentType.startsWith('image/'))) {
+                    return { type: 'input_image', image: a.url, detail: DEFAULT_IMAGE_DETAIL };
+                  }
+                  return { type: 'input_file', file: { url: a.url } };
+                })
+            : [];
+
+        return {
+          type: 'message',
+          role,
+          content: [
+            {
+              type: role === 'user' ? 'input_text' : 'output_text',
+              text: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+            },
+            ...attachmentParts,
+          ],
+        };
+      });
+    } else if (sessionId) {
       const session = await getSession(sessionId);
       if (session) {
         // Convert stored messages to AgentInputItem format
@@ -279,8 +316,14 @@ export async function POST(req: NextRequest) {
       ],
     };
 
-    // Save user message to session if sessionId provided
-    if (sessionId) {
+    // Save user message
+    if (isProjectMode) {
+      await addMessageToProjectChat(projectId, projectChatId, {
+        role: 'user',
+        content: lastText,
+        ...(lastAttachments.length > 0 ? { attachments: lastAttachments } : {}),
+      });
+    } else if (sessionId) {
       await addMessageToSession(sessionId, {
         role: 'user',
         content: lastText,
@@ -288,28 +331,101 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const isSpecificMode = agentMode === 'specific' && !!selectedAgentId;
+    let projectPrompt = '';
+    let projectDocsContext = '';
+    let projectDocFileParts: any[] = [];
+
+    let effectiveAgentMode = agentMode;
+    let effectiveSelectedAgentId = selectedAgentId;
+    let effectiveTeamId = teamId;
+
+    if (isProjectMode) {
+      const project = await getProject(projectId);
+      if (!project) {
+        return new Response(JSON.stringify({ error: 'Project not found' }), { status: 404 });
+      }
+
+      projectPrompt = typeof (project as any)?.projectPrompt === 'string' ? (project as any).projectPrompt.trim() : '';
+      const assignment: any = (project as any)?.assignment;
+
+      if (assignment?.mode === 'agent' && typeof assignment.agentId === 'string' && assignment.agentId.trim()) {
+        effectiveAgentMode = 'specific';
+        effectiveSelectedAgentId = assignment.agentId.trim();
+        effectiveTeamId = null;
+      } else if (assignment?.mode === 'team' && typeof assignment.teamId === 'string' && assignment.teamId.trim()) {
+        effectiveAgentMode = 'all';
+        effectiveTeamId = assignment.teamId.trim();
+        effectiveSelectedAgentId = null;
+      } else {
+        // Fallback if project not configured yet
+        effectiveAgentMode = 'all';
+      }
+
+      const docs = await listProjectDocuments(projectId);
+      const blocks: string[] = [];
+      let used = 0;
+      for (const d of docs) {
+        if (used >= MAX_TOTAL_EXTRACT_CHARS) break;
+
+        const title = typeof (d as any)?.title === 'string' ? (d as any).title.trim() : 'Untitled';
+        const type = (d as any)?.type === 'file' ? 'file' : 'text';
+        const content =
+          type === 'text'
+            ? (typeof (d as any)?.content === 'string' ? (d as any).content : '')
+            : (typeof (d as any)?.extractedText === 'string' ? (d as any).extractedText : '');
+
+        const trimmed = (content || '').trim();
+        if (trimmed) {
+          const remaining = Math.max(0, MAX_TOTAL_EXTRACT_CHARS - used);
+          const chunk = truncate(trimmed, Math.min(MAX_EXTRACT_CHARS_PER_FILE, remaining));
+          used += chunk.length;
+          blocks.push(`---\nPROJECT_DOC: ${title}\nTYPE: ${type}\n---\n${chunk}\n`);
+        }
+
+        if (type === 'file' && typeof (d as any)?.file?.url === 'string' && (d as any).file.url) {
+          projectDocFileParts.push({ type: 'input_file', file: { url: (d as any).file.url } });
+        }
+      }
+
+      if (blocks.length > 0) {
+        projectDocsContext = `\n\n[Project documents]\n${blocks.join('\n')}`;
+      }
+
+      const projectPromptBlock =
+        projectPrompt.length > 0 ? `\n\n[Project prompt (highest priority)]\n${projectPrompt}` : '';
+
+      // Attach project prompt + docs to the user turn so they are visible to selector/specialists and lead.
+      if (Array.isArray((lastMessageItem as any)?.content) && lastMessageItem.content[0]?.type === 'input_text') {
+        (lastMessageItem.content[0] as any).text = `${(lastMessageItem.content[0] as any).text}${projectPromptBlock}${projectDocsContext}`;
+        // Also attach file docs as input_file parts (limited implicitly by docs iteration)
+        if (projectDocFileParts.length > 0) {
+          (lastMessageItem.content as any[]).push(...projectDocFileParts.slice(0, 12));
+        }
+      }
+    }
+
+    const isSpecificMode = effectiveAgentMode === 'specific' && !!effectiveSelectedAgentId;
     let leadAgent: Agent;
     let specialistAgents: Agent[] = [];
     let specialistCatalog: { id: string; name?: string; description?: string }[] = [];
 
-    if (isSpecificMode && selectedAgentId) {
+    if (isSpecificMode && effectiveSelectedAgentId) {
       // Direct agent mode (prefer built-in/static agents, fall back to Firestore-defined agents)
-      if (agentsById[selectedAgentId]) {
-        leadAgent = agentsById[selectedAgentId];
+      if (agentsById[effectiveSelectedAgentId]) {
+        leadAgent = agentsById[effectiveSelectedAgentId];
       } else {
-        const agentDef = await getAgentDefinition(selectedAgentId);
+        const agentDef = await getAgentDefinition(effectiveSelectedAgentId);
         if (!agentDef) {
-          return new Response(JSON.stringify({ error: `Agent not found: ${selectedAgentId}` }), {
+          return new Response(JSON.stringify({ error: `Agent not found: ${effectiveSelectedAgentId}` }), {
             status: 404,
           });
         }
         leadAgent = await buildAgentFromDefinitionWithMemories(agentDef);
       }
-    } else if (teamId) {
+    } else if (effectiveTeamId) {
       // Team mode - consult sub-agents and have lead synthesize a single final answer.
       try {
-        const built = await buildTeamAgentsForConsultation(teamId);
+        const built = await buildTeamAgentsForConsultation(effectiveTeamId);
         leadAgent = built.teamLeadAgent;
         specialistAgents = built.subAgents;
         specialistCatalog = built.subAgentDefinitions.map((d) => ({
@@ -369,6 +485,26 @@ export async function POST(req: NextRequest) {
       specialistAgents = await Promise.all(specialistAgents.map((a) => applyMemoriesToAgent(a)));
     }
 
+    // Project prompt must take highest priority: prefix it into agent instructions.
+    if (isProjectMode && projectPrompt.trim().length > 0) {
+      const prefixInstructions = (agent: Agent): Agent => {
+        const anyAgent: any = agent as any;
+        const baseInstructions = typeof anyAgent?.instructions === 'string' ? anyAgent.instructions : '';
+        const nextInstructions = [
+          projectPrompt.trim(),
+          baseInstructions ? `\n\n[Base agent prompt follows]\n${baseInstructions}` : '',
+        ]
+          .join('')
+          .trim();
+        return cloneAgentWithInstructions(agent, nextInstructions);
+      };
+
+      leadAgent = prefixInstructions(leadAgent);
+      if (specialistAgents.length > 0) {
+        specialistAgents = specialistAgents.map((a) => prefixInstructions(a));
+      }
+    }
+
     const encoder = new TextEncoder();
     
     const stream = new ReadableStream({
@@ -383,6 +519,18 @@ export async function POST(req: NextRequest) {
           let phaseForPersistence: 'planning' | 'consulting' | 'answering' | 'done' | undefined;
 
           if (shouldConsultTeam) {
+            const projectContextForTeam =
+              isProjectMode && (projectPrompt.trim().length > 0 || projectDocsContext.trim().length > 0)
+                ? truncate(
+                    [
+                      projectPrompt.trim().length > 0 ? `[PROJECT PROMPT]\n${projectPrompt.trim()}` : '',
+                      projectDocsContext.trim().length > 0 ? `[PROJECT DOCUMENTS]\n${projectDocsContext.trim()}` : '',
+                    ]
+                      .filter(Boolean)
+                      .join('\n\n'),
+                    12_000
+                  )
+                : '';
             const transcriptForSelector = agentInputItemsToTranscript(runInputBase.slice(-12), MAX_TRANSCRIPT_CHARS_FOR_SELECTOR);
             const catalogText = buildSpecialistCatalogText(specialistCatalog);
 
@@ -406,6 +554,7 @@ export async function POST(req: NextRequest) {
             });
 
             const selectorPrompt = [
+              ...(projectContextForTeam ? [`PROJECT CONTEXT (highest priority):`, projectContextForTeam, ``] : []),
               `AVAILABLE SPECIALISTS (choose by ID):`,
               catalogText,
               ``,
@@ -461,8 +610,24 @@ export async function POST(req: NextRequest) {
               phaseForPersistence = 'consulting';
               const transcriptForSpecialists = agentInputItemsToTranscript(runInputBase.slice(-16), MAX_TRANSCRIPT_CHARS_FOR_SPECIALISTS);
 
+              const projectContextForConsultation =
+                isProjectMode && (projectPrompt.trim().length > 0 || projectDocsContext.trim().length > 0)
+                  ? truncate(
+                      [
+                        projectPrompt.trim().length > 0 ? `[PROJECT PROMPT]\n${projectPrompt.trim()}` : '',
+                        projectDocsContext.trim().length > 0 ? `[PROJECT DOCUMENTS]\n${projectDocsContext.trim()}` : '',
+                      ]
+                        .filter(Boolean)
+                        .join('\n\n'),
+                      12_000
+                    )
+                  : '';
+
               const consultationPrompt = (specialistId: string) =>
                 [
+                  ...(projectContextForConsultation
+                    ? [`PROJECT CONTEXT (highest priority):`, projectContextForConsultation, ``]
+                    : []),
                   `You are being consulted by the Chief of Staff. Do NOT speak to the user directly.`,
                   `Provide internal notes only. Be concise and actionable.`,
                   ``,
@@ -583,8 +748,18 @@ export async function POST(req: NextRequest) {
                 ? JSON.stringify(result.finalOutput)
                 : assistantMessageContent || '';
 
-          // Save assistant response to session if sessionId provided
-          if (sessionId) {
+          // Save assistant response
+          if (isProjectMode) {
+            await addMessageToProjectChat(projectId, projectChatId, {
+              role: 'assistant',
+              content: finalText,
+              agent: currentAgentName,
+              ...(typeof planTextForPersistence === 'string' && planTextForPersistence.trim().length > 0
+                ? { planText: planTextForPersistence.trim() }
+                : {}),
+              ...(Array.isArray(consultedAgentsForPersistence) ? { consultedAgents: consultedAgentsForPersistence } : {}),
+            });
+          } else if (sessionId) {
             await addMessageToSession(sessionId, {
               role: 'assistant',
               content: finalText,

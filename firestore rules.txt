@@ -89,5 +89,26 @@ service cloud.firestore {
       // allow write: if request.auth != null;
       allow write: if true;
     }
+
+    // Projects (projects, project chats/messages, and project documents)
+    match /projects/{projectId} {
+      allow read: if true;
+      allow write: if true;
+
+      match /chats/{chatId} {
+        allow read: if true;
+        allow write: if true;
+
+        match /messages/{messageId} {
+          allow read: if true;
+          allow write: if true;
+        }
+      }
+
+      match /documents/{documentId} {
+        allow read: if true;
+        allow write: if true;
+      }
+    }
   }
 }
