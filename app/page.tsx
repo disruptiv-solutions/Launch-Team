@@ -45,6 +45,7 @@ import { twMerge } from 'tailwind-merge';
 import { ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from '@/lib/firebase';
 import { addMessageToSession } from '@/lib/sessions';
+import { DinoRun } from '@/lib/DinoRun';
 
 const cn = (...inputs: ClassValue[]) => {
   return twMerge(clsx(inputs));
@@ -4449,6 +4450,12 @@ Rules:
               )}
             </section>
           </div>
+          )}
+          
+          {!isDesktopLivePanelCollapsed && (
+            <div className="mt-auto">
+              <DinoRun />
+            </div>
           )}
         </aside>
 
