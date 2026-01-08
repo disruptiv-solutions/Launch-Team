@@ -317,14 +317,10 @@ export async function POST(req: NextRequest) {
     };
 
     // Save user message
+    // - Project mode: server is the source of truth for persistence
+    // - Session mode: client already persists the user message; avoid double-saving (breaks indexes + TTS)
     if (isProjectMode) {
       await addMessageToProjectChat(projectId, projectChatId, {
-        role: 'user',
-        content: lastText,
-        ...(lastAttachments.length > 0 ? { attachments: lastAttachments } : {}),
-      });
-    } else if (sessionId) {
-      await addMessageToSession(sessionId, {
         role: 'user',
         content: lastText,
         ...(lastAttachments.length > 0 ? { attachments: lastAttachments } : {}),

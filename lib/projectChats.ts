@@ -32,6 +32,7 @@ export type ProjectChatMessage = {
   agent?: string;
   consultedAgents?: string[];
   planText?: string;
+  audioUrl?: string;
   createdAt: Timestamp;
 };
 
@@ -134,5 +135,15 @@ export const addMessageToProjectChat = async (
   await updateDoc(chatDoc(projectId, chatId), { updatedAt: Timestamp.now(), messageCount: increment(1) });
 
   return messageId;
+};
+
+export const updateProjectChatMessageAudioUrl = async (
+  projectId: string,
+  chatId: string,
+  messageId: string,
+  audioUrl: string
+): Promise<void> => {
+  if (!messageId || !audioUrl) return;
+  await updateDoc(messageDoc(projectId, chatId, messageId), { audioUrl });
 };
 

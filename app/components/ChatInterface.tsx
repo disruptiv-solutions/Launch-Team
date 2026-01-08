@@ -52,6 +52,7 @@ const cn = (...inputs: ClassValue[]) => {
 };
 
 type Message = {
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
   agent?: string;
@@ -958,6 +959,7 @@ Rules:
           loadedMessages = apiMessages
             .filter((m: any) => m?.role === 'user' || m?.role === 'assistant')
             .map((m: any): Message => ({
+              id: typeof m.id === 'string' ? m.id : undefined,
               role: m.role,
               content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
               ...(typeof m.agent === 'string' ? { agent: m.agent } : {}),
@@ -1423,8 +1425,9 @@ Rules:
     setPendingAttachments([]);
   };
 
-  const handleTextToSpeech = async (msg: Message, index: number) => {
-    const messageId = `msg-${index}`;
+  const handleTextToSpeech = async (params: { msg: Message; uiIndex: number; persistedIndex: number }) => {
+    const { msg, uiIndex, persistedIndex } = params;
+    const messageId = `msg-${uiIndex}`;
     
     // If already playing this message, stop it
     if (playingTTSMessageId === messageId) {
@@ -1443,14 +1446,28 @@ Rules:
       let audioUrl = msg.audioUrl;
 
       if (!audioUrl) {
+        if (!isProjectMode && !currentSessionId) {
+          alert('Please create/select a session before generating audio.');
+          return;
+        }
+
         setLoadingTTSMessageId(messageId);
         const response = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: msg.content,
-            sessionId: currentSessionId,
-            messageIndex: index,
+            ...(isProjectMode
+              ? {
+                  projectId,
+                  projectChatId,
+                  messageId: msg.id || null,
+                  messageKey: msg.id ? `db_${msg.id}` : `idx_${persistedIndex}`,
+                }
+              : {
+                  sessionId: currentSessionId,
+                  messageIndex: persistedIndex,
+                }),
           }),
         });
 
@@ -1461,8 +1478,8 @@ Rules:
         // Update local messages state with the new audioUrl
         setMessages(prev => {
           const next = [...prev];
-          if (next[index]) {
-            next[index] = { ...next[index], audioUrl };
+          if (next[uiIndex]) {
+            next[uiIndex] = { ...next[uiIndex], audioUrl };
           }
           return next;
         });
@@ -3056,7 +3073,7 @@ Rules:
                         Save to Docs
                       </button>
                       <button
-                        onClick={() => handleTextToSpeech(msg, index)}
+                        onClick={() => handleTextToSpeech({ msg, uiIndex: index, persistedIndex: meaningfulIndex })}
                         disabled={loadingTTSMessageId === `msg-${index}`}
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold rounded-lg transition-colors",

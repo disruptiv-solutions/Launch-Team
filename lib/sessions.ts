@@ -52,11 +52,19 @@ const SESSIONS_COLLECTION = 'sessions';
 export const createSession = async (title?: string, teamId?: string): Promise<string> => {
   const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const now = Timestamp.now();
+
+  const welcomeMessage: Message = {
+    role: 'assistant',
+    content:
+      "Welcome to LaunchHub AI Mission Control. I'm your Chief of Staff. I coordinate specialized agents to solve complex tasks. What's our objective today?",
+    agent: 'chief_of_staff',
+    timestamp: now,
+  };
   
   const sessionData: Session = {
     id: sessionId,
     title: title || `New Session ${new Date().toLocaleDateString()}`,
-    messages: [],
+    messages: [welcomeMessage],
     teamId,
     createdAt: now,
     updatedAt: now,
