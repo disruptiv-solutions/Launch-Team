@@ -4227,11 +4227,11 @@ Rules:
       {/* Live Panel - Desktop (Right Side) */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col bg-neutral-900 border-l border-neutral-800 transition-all duration-300",
+          "hidden lg:flex flex-col bg-neutral-900 border-l border-neutral-800 transition-all duration-300 h-screen",
           isDesktopLivePanelCollapsed ? "w-16" : "w-[576px]"
         )}
       >
-          <div className={cn("border-b border-neutral-800", isDesktopLivePanelCollapsed ? "p-3" : "p-6")}>
+          <div className={cn("border-b border-neutral-800 flex-shrink-0", isDesktopLivePanelCollapsed ? "p-3" : "p-6")}>
             <div className={cn("flex items-center", isDesktopLivePanelCollapsed ? "justify-center mb-3" : "justify-between mb-4")}>
               <div className={cn("flex items-center", isDesktopLivePanelCollapsed ? "justify-center" : "gap-3")}>
                 <div className="p-2 bg-indigo-900/30 rounded-lg">
@@ -4453,7 +4453,7 @@ Rules:
           )}
           
           {!isDesktopLivePanelCollapsed && (
-            <div className="mt-auto">
+            <div className="flex-shrink-0">
               <DinoRun />
             </div>
           )}
