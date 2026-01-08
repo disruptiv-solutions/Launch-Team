@@ -40,6 +40,7 @@ export type Message = {
   attachments?: Attachment[];
   consultedAgents?: string[];
   planText?: string;
+  audioUrl?: string;
   timestamp?: Timestamp;
 };
 
@@ -163,8 +164,33 @@ export const addMessageToSession = async (
     ...(typeof message.planText === 'string' && message.planText.trim()
       ? { planText: message.planText.trim() }
       : {}),
+    ...(typeof message.audioUrl === 'string' && message.audioUrl.trim()
+      ? { audioUrl: message.audioUrl.trim() }
+      : {}),
   };
 
   const updatedMessages = [...session.messages, nextMessage];
+  await updateSessionMessages(sessionId, updatedMessages);
+};
+
+/**
+ * Update the audio URL for a specific message in a session
+ */
+export const updateMessageAudioUrl = async (
+  sessionId: string,
+  messageIndex: number,
+  audioUrl: string
+): Promise<void> => {
+  const session = await getSession(sessionId);
+  if (!session || !session.messages[messageIndex]) {
+    throw new Error(`Session ${sessionId} or message at index ${messageIndex} not found`);
+  }
+
+  const updatedMessages = [...session.messages];
+  updatedMessages[messageIndex] = {
+    ...updatedMessages[messageIndex],
+    audioUrl,
+  };
+
   await updateSessionMessages(sessionId, updatedMessages);
 };

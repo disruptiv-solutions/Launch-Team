@@ -36,7 +36,9 @@ import {
   CheckSquare,
   Square,
   X as XIcon,
-  Brain
+  Brain,
+  Volume2,
+  Pencil
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -57,6 +59,7 @@ type Message = {
   consultedAgentsCompleted?: string[];
   planText?: string;
   phase?: 'planning' | 'consulting' | 'answering' | 'done';
+  audioUrl?: string;
   isStreaming?: boolean;
 };
 
@@ -252,6 +255,18 @@ const ChatInterface = () => {
   const [isLoadingAgentMemories, setIsLoadingAgentMemories] = useState(false);
   const [isSavingAgentMemory, setIsSavingAgentMemory] = useState<Map<string, boolean>>(new Map());
   const [isDeletingAgentMemory, setIsDeletingAgentMemory] = useState<Map<string, boolean>>(new Map());
+  const [loadingTTSMessageId, setLoadingTTSMessageId] = useState<string | null>(null);
+  const [playingTTSMessageId, setPlayingTTSMessageId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
+
+  // Auto-resize textarea when input changes
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
+    }
+  }, [input]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -296,6 +311,7 @@ const ChatInterface = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const MAX_IMAGES_PER_MESSAGE = 4;
   const MAX_ATTACHMENTS_PER_MESSAGE = 6;
@@ -1291,6 +1307,103 @@ Rules:
     }
   };
 
+  const handleEditMessage = (index: number) => {
+    const msg = messages[index];
+    if (!msg || msg.role !== 'user') return;
+    
+    setInput(msg.content);
+    setEditingMessageIndex(index);
+
+    // Restore attachments
+    if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+      const restored = msg.attachments.map(att => ({
+        ...att,
+        status: 'ready' as const,
+        progress: 100,
+      }));
+      setPendingAttachments(restored);
+    } else {
+      setPendingAttachments([]);
+    }
+    
+    // Focus the input
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  };
+
+  const cancelEdit = () => {
+    setEditingMessageIndex(null);
+    setInput('');
+    setPendingAttachments([]);
+  };
+
+  const handleTextToSpeech = async (msg: Message, index: number) => {
+    const messageId = `msg-${index}`;
+    
+    // If already playing this message, stop it
+    if (playingTTSMessageId === messageId) {
+      audioRef.current?.pause();
+      setPlayingTTSMessageId(null);
+      return;
+    }
+
+    // Stop any currently playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      setPlayingTTSMessageId(null);
+    }
+
+    try {
+      let audioUrl = msg.audioUrl;
+
+      if (!audioUrl) {
+        setLoadingTTSMessageId(messageId);
+        const response = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: msg.content,
+            sessionId: currentSessionId,
+            messageIndex: index,
+          }),
+        });
+
+        if (!response.ok) throw new Error('Failed to generate speech');
+        const data = await response.json();
+        audioUrl = data.audioUrl;
+
+        // Update local messages state with the new audioUrl
+        setMessages(prev => {
+          const next = [...prev];
+          if (next[index]) {
+            next[index] = { ...next[index], audioUrl };
+          }
+          return next;
+        });
+      }
+
+      if (audioUrl) {
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+        
+        audio.onplay = () => setPlayingTTSMessageId(messageId);
+        audio.onended = () => setPlayingTTSMessageId(null);
+        audio.onerror = () => {
+          setPlayingTTSMessageId(null);
+          alert('Failed to play audio');
+        };
+        
+        setLoadingTTSMessageId(null);
+        audio.play();
+      }
+    } catch (error) {
+      console.error('TTS error:', error);
+      setLoadingTTSMessageId(null);
+      alert('Error generating or playing speech');
+    }
+  };
+
   const saveTask = async (task: string, messageIndex: number) => {
     if (!currentSessionId) return;
     
@@ -1524,6 +1637,7 @@ Rules:
             agent: m.agent,
             planText: typeof m.planText === 'string' ? m.planText : undefined,
             consultedAgents: Array.isArray(m.consultedAgents) ? m.consultedAgents : undefined,
+            audioUrl: typeof m.audioUrl === 'string' ? m.audioUrl : undefined,
             attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
           }));
           
@@ -1614,15 +1728,32 @@ Rules:
     const hasContentToSend = nextText.length > 0 || readyAttachments.length > 0;
     if (!hasContentToSend) return;
 
+    const isEditing = editingMessageIndex !== null;
+    const targetIndex = isEditing ? editingMessageIndex : messages.length;
+
+    // Rollback logic for editing
+    let currentMessages = [...messages];
+    if (isEditing) {
+      // Keep only messages before the one we are editing
+      currentMessages = currentMessages.slice(0, targetIndex);
+    } else {
+      // Filter out any streaming messages if we are not editing
+      currentMessages = currentMessages.filter(m => !m.isStreaming);
+    }
+
     const userMessage: Message = {
       role: 'user',
       content: nextText,
       ...(readyAttachments.length > 0 ? { attachments: readyAttachments } : {}),
     };
-    setMessages((prev) => [...prev, userMessage]);
+
+    const nextMessages = [...currentMessages, userMessage];
+    setMessages(nextMessages);
     setInput('');
     setPendingAttachments([]);
+    setEditingMessageIndex(null);
     setIsLoading(true);
+
     // Set initial active agent based on mode
     if (agentMode === 'specific' && selectedAgentId) {
       setActiveAgent(selectedAgentId);
@@ -1661,6 +1792,18 @@ Rules:
         }
       }
 
+      if (sessionIdToUse && isEditing) {
+        // If editing, overwrite the session messages with the rolled-back set
+        await fetch(`/api/sessions?sessionId=${sessionIdToUse}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: nextMessages }),
+        });
+      } else if (sessionIdToUse) {
+        // Otherwise just add the new message normally
+        await addMessageToSession(sessionIdToUse, userMessage);
+      }
+
       const sessionTeamId =
         sessions.find((s) => s.id === sessionIdToUse)?.teamId || currentTeamId;
 
@@ -1668,7 +1811,7 @@ Rules:
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          messages: [...messages.filter(m => !m.isStreaming), userMessage],
+          messages: nextMessages,
           sessionId: sessionIdToUse,
           agentMode: agentMode,
           selectedAgentId: agentMode === 'specific' ? selectedAgentId : null,
@@ -1876,6 +2019,9 @@ Rules:
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape' && editingMessageIndex !== null) {
+      cancelEdit();
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
@@ -2787,6 +2933,59 @@ Rules:
                         <FileText size={12} />
                         Save to Docs
                       </button>
+                      <button
+                        onClick={() => handleTextToSpeech(msg, index)}
+                        disabled={loadingTTSMessageId === `msg-${index}`}
+                        className={cn(
+                          "flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold rounded-lg transition-colors",
+                          playingTTSMessageId === `msg-${index}`
+                            ? "bg-indigo-900/30 text-indigo-400"
+                            : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700",
+                          loadingTTSMessageId === `msg-${index}` && "opacity-50 cursor-not-allowed"
+                        )}
+                        aria-label="Read aloud"
+                      >
+                        {loadingTTSMessageId === `msg-${index}` ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Volume2 size={12} className={cn(playingTTSMessageId === `msg-${index}` && "animate-pulse")} />
+                        )}
+                        {playingTTSMessageId === `msg-${index}` ? 'Playing...' : 'Speak'}
+                      </button>
+                    </div>
+                  )}
+
+                  {msg.role === 'user' && !msg.isStreaming && (
+                    <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => handleEditMessage(index)}
+                        className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold rounded-lg bg-neutral-800 text-neutral-400 hover:bg-neutral-700 transition-colors"
+                        aria-label="Edit message"
+                      >
+                        <Pencil size={12} />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleCopyMessage(msg.content, `msg-${index}`)}
+                        className={cn(
+                          "flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold rounded-lg transition-colors",
+                          copiedMessageId === `msg-${index}`
+                            ? "bg-green-900/30 text-green-400"
+                            : "bg-neutral-800 text-neutral-400 hover:bg-neutral-700"
+                        )}
+                      >
+                        {copiedMessageId === `msg-${index}` ? (
+                          <>
+                            <CheckCircle size={12} />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={12} />
+                            Copy
+                          </>
+                        )}
+                      </button>
                     </div>
                   )}
                   
@@ -2865,6 +3064,21 @@ Rules:
             onSubmit={handleSendMessage}
             className="max-w-4xl mx-auto"
           >
+            {editingMessageIndex !== null && (
+              <div className="mb-3 px-4 py-2 bg-indigo-900/30 border border-indigo-800/50 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Pencil size={14} className="text-indigo-400" />
+                  <span className="text-xs font-semibold text-indigo-100">Editing message...</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="text-xs font-bold text-neutral-400 hover:text-neutral-200 transition-colors uppercase tracking-widest"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
             <div className="relative flex items-end gap-3 p-2 bg-neutral-900 rounded-[2rem] border border-neutral-800 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500/50 transition-all">
               <input
                 ref={attachmentInputRef}
@@ -2888,13 +3102,14 @@ Rules:
               </button>
               
               <textarea
+                ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onPaste={handlePaste}
                 placeholder="Brief your team..."
                 rows={1}
-                className="flex-1 bg-transparent text-neutral-100 pl-1 pr-12 py-3 focus:outline-none resize-none overflow-hidden text-base min-h-[50px] max-h-[200px] break-words overflow-wrap-anywhere min-w-0"
+                className="flex-1 bg-transparent text-neutral-100 pl-1 pr-12 py-3 focus:outline-none resize-none overflow-y-auto text-base min-h-[50px] max-h-[400px] break-words overflow-wrap-anywhere min-w-0"
                 onInput={(e) => {
                   const target = e.target as HTMLTextAreaElement;
                   target.style.height = 'auto';

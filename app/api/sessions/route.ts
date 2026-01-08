@@ -46,18 +46,25 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// PUT /api/sessions/[sessionId] - Update session title
+// PUT /api/sessions/[sessionId] - Update session title or messages
 export async function PUT(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const sessionId = searchParams.get('sessionId');
-    const { title } = await req.json();
+    const { title, messages } = await req.json();
 
     if (!sessionId) {
       return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
     }
 
-    await updateSessionTitle(sessionId, title);
+    if (title !== undefined) {
+      await updateSessionTitle(sessionId, title);
+    }
+
+    if (messages !== undefined) {
+      await updateSessionMessages(sessionId, messages);
+    }
+
     const session = await getSession(sessionId);
     return NextResponse.json({ session });
   } catch (error: any) {

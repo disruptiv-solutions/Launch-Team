@@ -7,9 +7,23 @@ const inter = Inter({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "LAUNCH | AI Team Control",
   description: "Advanced hierarchical multi-agent coordination system.",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/pwa/favicon.ico",
+    apple: "/pwa/apple-touch-icon.png",
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "LAUNCH",
+  },
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export const viewport: Viewport = {
+  themeColor: "#4f46e5",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
